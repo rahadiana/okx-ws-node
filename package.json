@@ -1,0 +1,25 @@
+{
+  "name": "@rahadiana/okx-ws-node",
+  "version": "0.0.1",
+  "description": "okx-ws-node",
+  "main": "./src/index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/rahadiana/okx-ws-node.git"
+  },
+  "keywords": [],
+  "author": "rahadiana nugraha <rahadiana.nugraha@gmail.com>",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/rahadiana/okx-ws-node/issues"
+  },
+  "homepage": "https://github.com/rahadiana/okx-ws-node#readme",
+  "dependencies": {
+    "@rahadiana/node_response_standard": "^0.0.2",
+    "follow-redirects": "^1.15.6",
+    "ws": "^8.18.0"
+  }
+}
