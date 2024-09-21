@@ -1,5 +1,5 @@
 {
-  "name": "@rahadiana/okx-ws-node",
+  "name": "@nusantaracode/okx-ws-node",
   "version": "0.0.1",
   "description": "okx-ws-node",
   "main": "./src/index.js",
