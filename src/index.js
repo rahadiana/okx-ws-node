@@ -3,7 +3,7 @@ var https = require('follow-redirects').https;
 var fs = require('fs');
 var dns = require('dns');
 
-let reconnectInterval = 3000; // millisecond
+let reconnectInterval = 500; // millisecond
 
 async function OKXWsAggregate(CoinArray, messageCallback) {
     let Ws = 'wss://wspri.okx.com:8443/ws/v5/ipublic';
