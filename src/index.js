@@ -239,7 +239,7 @@ async function OKXWsOptimizedBooks(CoinArray, messageCallback) {
     connectWebSocket();
 }
 
-function SpotCoin() {
+function GetCoinName($TYPE) {
     return new Promise((resolve, reject) => {
         
         // Custom DNS resolution
@@ -254,7 +254,7 @@ function SpotCoin() {
         var options = {
           'method': 'GET',
           'hostname': 'www.okx.com',
-          'path': `/priapi/v5/public/simpleProduct?instType=SPOT&includeType=1&t=${Date.now()}`,
+          'path': `/priapi/v5/public/simpleProduct?instType=${$TYPE}&includeType=1&t=${Date.now()}`,
           'lookup': customLookup,  // Use the custom DNS lookup function
           'maxRedirects': 10,
           'timeout': 9000
@@ -284,6 +284,42 @@ function SpotCoin() {
         req.end();
     });
 }
+
+
+function SpotCoin() {
+    return new Promise((resolve, reject) => {
+
+        GetCoinName('SPOT').then(result => {
+            resolve(result);
+        }).catch(error => {
+            reject(error);
+        });
+    });
+}
+
+
+function SwapCoin() {
+    return new Promise((resolve, reject) => {
+
+        GetCoinName('SWAP').then(result => {
+            resolve(result);
+        }).catch(error => {
+            reject(error);
+        });
+    });
+}
+
+function FuturesCoin() {
+    return new Promise((resolve, reject) => {
+
+        GetCoinName('FUTURES').then(result => {
+            resolve(result);
+        }).catch(error => {
+            reject(error);
+        });
+    });
+}
+
 
 async function Aggregate(initialGroups, processFunction) {
     // Memulai WebSocket dan menerima pesan secara streaming
@@ -324,4 +360,4 @@ async function OptimizedBooks(initialGroups, processFunction) {
 // {"op":"subscribe","args":[{"channel":"tickers","instId":"BTC-USDT"},{"ccy":"USDT","channel":"cup-tickers-3s"},{"channel":"mark-price","instId":"BTC-USDT"},{"channel":"index-tickers","instId":"BTC-USDT"}]}
 
 // Export the OKXWsAggregate function
-module.exports = { OKXWsAggregate,SpotCoin,Aggregate,IndexTickers,Tickers,MarkPrice,OptimizedBooks };
+module.exports = { OKXWsAggregate,SpotCoin,SwapCoin,FuturesCoin,Aggregate,IndexTickers,Tickers,MarkPrice,OptimizedBooks };
