@@ -5,261 +5,167 @@ var dns = require('dns');
 
 let reconnectInterval = 500; // millisecond
 
-async function OKXWsAggregate(CoinArray, messageCallback) {
-    let Ws = 'wss://wspri.okx.com:8443/ws/v5/ipublic';
-    let ws;
+async function WsConnection(CoinArray, ChannelType, messageCallback) {
+    const Ws = 'wss://wspri.okx.com:8443/ws/v5/ipublic';
 
-    function GetJsonArray(coinName) {
-        return `{"op":"subscribe","args":[{"channel":"aggregated-trades","instId":"${coinName.toUpperCase()}"}]}`
+    // If no coins provided, default to BTC-USDT
+    const coins = (Array.isArray(CoinArray) && CoinArray.length > 0) ? CoinArray : ["BTC-USDT"];
+    const BATCH_SIZE = 5;
+
+    function chunkArray(arr, size) {
+        const chunks = [];
+        for (let i = 0; i < arr.length; i += size) {
+            chunks.push(arr.slice(i, i + size));
+        }
+        return chunks;
     }
-    // optimized-books, tickers, mark-price, index-tickers, aggregated-trades
-    
-    const WsSend = CoinArray.length > 0
-        ? CoinArray.map(d => GetJsonArray(d))
-        : [GetJsonArray("BTC-USDT")];
 
-    function connectWebSocket() {
-        ws = new WebSocket(Ws);
+    const batches = chunkArray(coins, BATCH_SIZE);
 
-        ws.on('open', function open() {
-            WsSend.forEach(d => {
-                if (ws.readyState === WebSocket.OPEN) {
-                    ws.send(d);
+    // Build single subscribe message per batch (reduces allocations and messages)
+    function buildSubscribeMessage(batchCoins) {
+        const args = batchCoins.map(inst => ({ channel: ChannelType, instId: inst.toUpperCase() }));
+        return JSON.stringify({ op: 'subscribe', args });
+    }
+
+    // Track connections so we can cleanup and avoid leaking timers/listeners
+    const connections = new Map(); // key: batchKey string -> { ws, timer, backoff }
+
+    function createConnection(batchCoins) {
+        const key = batchCoins.join(',');
+        let conn = connections.get(key) || { ws: null, timer: null, backoff: reconnectInterval };
+
+        function connect() {
+            // clear previous timer if any
+            if (conn.timer) {
+                clearTimeout(conn.timer);
+                conn.timer = null;
+            }
+
+            // Clean up old websocket listeners/instance to avoid leaks
+            if (conn.ws) {
+                try {
+                    conn.ws.removeAllListeners();
+                    conn.ws.terminate();
+                } catch (e) {}
+                conn.ws = null;
+            }
+
+            const ws = new WebSocket(Ws);
+            conn.ws = ws;
+
+            ws.once('open', () => {
+                // reset backoff after successful open
+                conn.backoff = reconnectInterval;
+                const subscribeMsg = buildSubscribeMessage(batchCoins);
+                if (ws.readyState === WebSocket.OPEN) ws.send(subscribeMsg);
+            });
+
+            ws.on('message', (data) => {
+                if (data !== 'Connected') {
+                    try {
+                        const parsed = JSON.parse(data);
+                        messageCallback(parsed);
+                    } catch (e) {
+                        // forward raw if not JSON
+                        messageCallback(data);
+                    }
                 }
             });
-        });
 
-        ws.on('close', function () {
-            const message = '{message:"ws close"}';
-            messageCallback(message);
-            setTimeout(connectWebSocket, reconnectInterval);
-        });
+            const scheduleReconnect = () => {
+                // exponential backoff to avoid busy reconnect loops
+                conn.backoff = Math.min(conn.backoff * 2, 30000);
+                if (conn.timer) clearTimeout(conn.timer);
+                conn.timer = setTimeout(connect, conn.backoff);
+            };
 
-        ws.on('error', function (error) {
-            setTimeout(connectWebSocket, reconnectInterval);
-            const errorMessage = '{message:"ws error"}';
-            messageCallback(errorMessage);
-        });
+            ws.once('close', (code, reason) => {
+                messageCallback({ message: 'ws close', batch: batchCoins, code, reason });
+                scheduleReconnect();
+            });
 
-        ws.on('message', function incoming(data) {
-            if (data !== "Connected") {
-                const parsedData = JSON.parse(data);
-                messageCallback(parsedData);
-            }
-        });
+            ws.once('error', (err) => {
+                messageCallback({ message: 'ws error', error: err && err.message ? err.message : err, batch: batchCoins });
+                // schedule reconnect (if not already scheduled)
+                if (!conn.timer) scheduleReconnect();
+            });
+        }
+
+        connections.set(key, conn);
+        connect();
     }
 
-    connectWebSocket();
+    // Start connections for each batch
+    batches.forEach(batch => createConnection(batch));
+
+    // Ensure cleanup on process exit to free timers and sockets
+    function cleanup() {
+        connections.forEach((conn) => {
+            if (conn.timer) clearTimeout(conn.timer);
+            if (conn.ws) {
+                try {
+                    conn.ws.removeAllListeners();
+                    conn.ws.terminate();
+                } catch (e) {}
+            }
+        });
+        connections.clear();
+    }
+
+    if (typeof process !== 'undefined' && process && process.once) {
+        process.once('exit', cleanup);
+        process.once('SIGINT', () => { cleanup(); process.exit(0); });
+    }
+}
+
+async function OKXWsAggregate(CoinArray, messageCallback) {
+    const ChannelType = 'aggregated-trades';
+    WsConnection(CoinArray, ChannelType, messageCallback);
 }
 
 async function OKXWsIndexTickers(CoinArray, messageCallback) {
-    let Ws = 'wss://wspri.okx.com:8443/ws/v5/ipublic';
-    let ws;
-
-    function GetJsonArray(coinName) {
-        return `{"op":"subscribe","args":[{"channel":"index-tickers","instId":"${coinName.toUpperCase()}"}]}`
-    }
-    // optimized-books, tickers, mark-price
-    
-    const WsSend = CoinArray.length > 0
-        ? CoinArray.map(d => GetJsonArray(d))
-        : [GetJsonArray("BTC-USDT")];
-
-    function connectWebSocket() {
-        ws = new WebSocket(Ws);
-
-        ws.on('open', function open() {
-            WsSend.forEach(d => {
-                if (ws.readyState === WebSocket.OPEN) {
-                    ws.send(d);
-                }
-            });
-        });
-
-        ws.on('close', function () {
-            const message = '{message:"ws close"}';
-            messageCallback(message);
-            setTimeout(connectWebSocket, reconnectInterval);
-        });
-
-        ws.on('error', function (error) {
-            setTimeout(connectWebSocket, reconnectInterval);
-            const errorMessage = '{message:"ws error"}';
-            messageCallback(errorMessage);
-        });
-
-        ws.on('message', function incoming(data) {
-            if (data !== "Connected") {
-                const parsedData = JSON.parse(data);
-                messageCallback(parsedData);
-            }
-        });
-    }
-
-    connectWebSocket();
+    const ChannelType = 'index-tickers';
+    WsConnection(CoinArray, ChannelType, messageCallback);
 }
 
 async function OKXWsMarkPrice(CoinArray, messageCallback) {
-    let Ws = 'wss://wspri.okx.com:8443/ws/v5/ipublic';
-    let ws;
-
-    function GetJsonArray(coinName) {
-        return `{"op":"subscribe","args":[{"channel":"mark-price","instId":"${coinName.toUpperCase()}"}]}`
-    }
-    // optimized-books, tickers
-    
-    const WsSend = CoinArray.length > 0
-        ? CoinArray.map(d => GetJsonArray(d))
-        : [GetJsonArray("BTC-USDT")];
-
-    function connectWebSocket() {
-        ws = new WebSocket(Ws);
-
-        ws.on('open', function open() {
-            WsSend.forEach(d => {
-                if (ws.readyState === WebSocket.OPEN) {
-                    ws.send(d);
-                }
-            });
-        });
-
-        ws.on('close', function () {
-            const message = '{message:"ws close"}';
-            messageCallback(message);
-            setTimeout(connectWebSocket, reconnectInterval);
-        });
-
-        ws.on('error', function (error) {
-            setTimeout(connectWebSocket, reconnectInterval);
-            const errorMessage = '{message:"ws error"}';
-            messageCallback(errorMessage);
-        });
-
-        ws.on('message', function incoming(data) {
-            if (data !== "Connected") {
-                const parsedData = JSON.parse(data);
-                messageCallback(parsedData);
-            }
-        });
-    }
-
-    connectWebSocket();
+    const ChannelType = 'mark-price';
+    WsConnection(CoinArray, ChannelType, messageCallback);
 }
 
 async function OKXWsTickers(CoinArray, messageCallback) {
-    let Ws = 'wss://wspri.okx.com:8443/ws/v5/ipublic';
-    let ws;
-
-    function GetJsonArray(coinName) {
-        return `{"op":"subscribe","args":[{"channel":"tickers","instId":"${coinName.toUpperCase()}"}]}`
-    }
-    // optimized-books
-    
-    const WsSend = CoinArray.length > 0
-        ? CoinArray.map(d => GetJsonArray(d))
-        : [GetJsonArray("BTC-USDT")];
-
-    function connectWebSocket() {
-        ws = new WebSocket(Ws);
-
-        ws.on('open', function open() {
-            WsSend.forEach(d => {
-                if (ws.readyState === WebSocket.OPEN) {
-                    ws.send(d);
-                }
-            });
-        });
-
-        ws.on('close', function () {
-            const message = '{message:"ws close"}';
-            messageCallback(message);
-            setTimeout(connectWebSocket, reconnectInterval);
-        });
-
-        ws.on('error', function (error) {
-            setTimeout(connectWebSocket, reconnectInterval);
-            const errorMessage = '{message:"ws error"}';
-            messageCallback(errorMessage);
-        });
-
-        ws.on('message', function incoming(data) {
-            if (data !== "Connected") {
-                const parsedData = JSON.parse(data);
-                messageCallback(parsedData);
-            }
-        });
-    }
-
-    connectWebSocket();
+    const ChannelType = 'tickers';
+    WsConnection(CoinArray, ChannelType, messageCallback);
 }
 
 async function OKXWsOptimizedBooks(CoinArray, messageCallback) {
-    let Ws = 'wss://wspri.okx.com:8443/ws/v5/ipublic';
-    let ws;
-
-    function GetJsonArray(coinName) {
-        return `{"op":"subscribe","args":[{"channel":"optimized-books","instId":"${coinName.toUpperCase()}"}]}`
-    }
-     
-    const WsSend = CoinArray.length > 0
-        ? CoinArray.map(d => GetJsonArray(d))
-        : [GetJsonArray("BTC-USDT")];
-
-    function connectWebSocket() {
-        ws = new WebSocket(Ws);
-
-        ws.on('open', function open() {
-            WsSend.forEach(d => {
-                if (ws.readyState === WebSocket.OPEN) {
-                    ws.send(d);
-                }
-            });
-        });
-
-        ws.on('close', function () {
-            const message = '{message:"ws close"}';
-            messageCallback(message);
-            setTimeout(connectWebSocket, reconnectInterval);
-        });
-
-        ws.on('error', function (error) {
-            setTimeout(connectWebSocket, reconnectInterval);
-            const errorMessage = '{message:"ws error"}';
-            messageCallback(errorMessage);
-        });
-
-        ws.on('message', function incoming(data) {
-            if (data !== "Connected") {
-                const parsedData = JSON.parse(data);
-                messageCallback(parsedData);
-            }
-        });
-    }
-
-    connectWebSocket();
+    const ChannelType = 'optimized-books';
+    WsConnection(CoinArray, ChannelType, messageCallback);
 }
+
 
 function GetCoinName($TYPE) {
     return new Promise((resolve, reject) => {
-        
+
         // Custom DNS resolution
         const customLookup = (hostname, options, callback) => {
-          if (hostname === 'www.okx.com') {
-            callback(null, '104.18.43.174', 4); // Using the provided IP address
-          } else {
-            dns.lookup(hostname, options, callback); // Fallback to the default DNS lookup
-          }
+            if (hostname === 'www.okx.com') {
+                callback(null, '104.18.43.174', 4); // Using the provided IP address
+            } else {
+                dns.lookup(hostname, options, callback); // Fallback to the default DNS lookup
+            }
         };
-        
+
         var options = {
-          'method': 'GET',
-          'hostname': 'www.okx.com',
-          'path': `/priapi/v5/public/simpleProduct?instType=${$TYPE}&includeType=1&t=${Date.now()}`,
-          'lookup': customLookup,  // Use the custom DNS lookup function
-          'maxRedirects': 10,
-          'timeout': 9000
+            'method': 'GET',
+            'hostname': 'www.okx.com',
+            'path': `/priapi/v5/public/simpleProduct?instType=${$TYPE}&includeType=1&t=${Date.now()}`,
+            'lookup': customLookup,  // Use the custom DNS lookup function
+            'maxRedirects': 10,
+            'timeout': 9000
         };
-        
+
         const req = https.request(options, (res) => {
             let data = '';
 
@@ -268,16 +174,16 @@ function GetCoinName($TYPE) {
             });
 
             res.on('end', () => {
-                resolve({status: 200, data:JSON.parse(data).data,message:'success' });
+                resolve({ status: 200, data: JSON.parse(data).data, message: 'success' });
             });
         });
 
         req.on('error', (e) => {
-            resolve({status: 500, message:e });
+            resolve({ status: 500, message: e });
         });
 
         req.on('timeout', () => {
-            resolve({status: 408,message:'timeout'});
+            resolve({ status: 408, message: 'timeout' });
             req.destroy();
         });
 
@@ -360,4 +266,4 @@ async function OptimizedBooks(initialGroups, processFunction) {
 // {"op":"subscribe","args":[{"channel":"tickers","instId":"BTC-USDT"},{"ccy":"USDT","channel":"cup-tickers-3s"},{"channel":"mark-price","instId":"BTC-USDT"},{"channel":"index-tickers","instId":"BTC-USDT"}]}
 
 // Export the OKXWsAggregate function
-module.exports = { OKXWsAggregate,SpotCoin,SwapCoin,FuturesCoin,Aggregate,IndexTickers,Tickers,MarkPrice,OptimizedBooks };
+module.exports = { OKXWsAggregate, SpotCoin, SwapCoin, FuturesCoin, Aggregate, IndexTickers, Tickers, MarkPrice, OptimizedBooks };
