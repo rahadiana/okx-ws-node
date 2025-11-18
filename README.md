@@ -15,126 +15,125 @@ Clone the repo or install as a dependency (if published):
 
 ```bash
 # clone
-git clone https://github.com/rahadiana/okx-ws-node.git
+# okx-ws-node
 
-# if published to npm
-# npm install okx-ws-node
-```
+Lightweight, high-throughput helper for OKX public WebSocket feeds.
 
-## Quick Start
+This repository provides a simple WebSocket consumer with several performance and safety improvements for long-running HFT-style consumers:
 
-Example usage (from the repository root):
+- Bounded, head-indexed per-connection queues to avoid O(n) shifting and unbounded memory growth.
+- Batch processing and a worker-thread parser pool to offload `JSON.parse` from the main event loop.
+- Tolerant JSON recovery (worker attempts to repair malformed fragments and extract objects).
+- Tunable options for queue sizes, batch sizes and parser workers.
+- Safe cleanup of timers, sockets and worker threads.
 
-```javascript
-const {
-	OKXWsAggregate,
-	SpotCoin,
-	SwapCoin,
-	FuturesCoin,
-	Aggregate,
-	IndexTickers,
-	Tickers,
-	MarkPrice,
-	OptimizedBooks
-} = require('./src'); // or require('okx-ws-node') when installed
+Files of interest
+- `src/index.js` — main library: exported helpers like `OKXWsAggregate`, `IndexTickers`, `MarkPrice`, etc.
+- `src/parser-worker.js` — worker used to parse/decode incoming messages (supports batch parsing and tolerant recovery).
+- `index.js` — example/starter that uses `SwapCoin()` to fetch instruments and start an `OKXWsAggregate` consumer.
+- `run-test.js` — small runner to exercise the flow and log memory + stats for profiling.
 
-function processFunction(message) {
-	console.log(message);
-}
+Requirements
+- Node.js 14+ recommended (worker_threads and modern V8 performance). 16+ preferred for best stability.
+- `npm install` to fetch dependencies used in the project (`ws`, `follow-redirects`, etc.).
 
-async function start() {
-	// Example: fetch swap instruments and subscribe to aggregated-trades
-	const coinList = await SwapCoin();
-	if (coinList.status === 200) {
-	const instIds = coinList.data.map(d => d.instId);
-	// OKXWsAggregate will split instIds into batches of 5 and open one WS per batch
-	OKXWsAggregate(instIds, processFunction);
-	} else {
-	console.error('Failed to fetch instruments:', coinList);
-	}
-}
+Quick start
 
-start();
-```
-
-## Exported functions
-
-- `OKXWsAggregate(CoinArray, messageCallback)` — subscribe to `aggregated-trades` for the instruments in `CoinArray`.
-- `OKXWsIndexTickers(CoinArray, messageCallback)` — subscribe to `index-tickers`.
-- `OKXWsMarkPrice(CoinArray, messageCallback)` — subscribe to `mark-price`.
-- `OKXWsTickers(CoinArray, messageCallback)` — subscribe to `tickers`.
-- `OKXWsOptimizedBooks(CoinArray, messageCallback)` — subscribe to `optimized-books`.
-- `SpotCoin()` — returns a promise resolving to `{ status, data, message }` with instrument list for SPOT.
-- `SwapCoin()` — same for SWAP instruments.
-- `FuturesCoin()` — same for FUTURES instruments.
-- `Aggregate(initialGroups, processFunction)` — convenience wrapper to start `aggregated-trades` streaming.
-- `IndexTickers(initialGroups, processFunction)` — convenience wrapper for `index-tickers`.
-- `MarkPrice(initialGroups, processFunction)` — convenience wrapper for `mark-price`.
-- `Tickers(initialGroups, processFunction)` — convenience wrapper for `tickers`.
-- `OptimizedBooks(initialGroups, processFunction)` — convenience wrapper for `optimized-books`.
-
-All WebSocket functions accept:
-- `CoinArray`: array of instrument strings (e.g. `['BTC-USDT','ETH-USDT']`). If empty or not provided, defaults to `['BTC-USDT']`.
-- `messageCallback`: function called for every received message or internal event.
-
-## Message format
-
-- Messages received from OKX (JSON) are parsed and forwarded to `messageCallback` as objects.
-- Internal events (close/error) are forwarded as objects, e.g.
-
-```json
-{ "message": "ws close", "batch": ["BTC-USDT","ETH-USDT"], "code": 1006, "reason": "" }
-
-{ "message": "ws error", "error": "ECONNRESET", "batch": ["..."] }
-```
-
-If you prefer string-only events, adjust your `messageCallback` accordingly or modify the code to stringify internal events.
-
-## Batching & memory optimizations
-
-- The implementation splits the requested instruments into batches of up to 5 instruments and opens one WebSocket per batch. This reduces the number of connections while keeping subscribe payloads reasonably small.
-- Each batch sends a single combined subscribe message (one JSON with multiple args) to reduce allocation and network overhead.
-- Connections are tracked in a Map; before reconnecting the previous socket is terminated and its listeners removed to avoid accumulating event handlers.
-- An exponential backoff (capped at 30s) is used for reconnect attempts to avoid busy restart loops and excessive resource use.
-
-## Configuration
-
-Currently batch size and other internals are hard-coded in `src/index.js`:
-- `BATCH_SIZE` is set to `5`.
-- `reconnectInterval` is defined at the top of `src/index.js` (default `500` ms) and used as the base backoff.
-
-If you need runtime configuration, consider modifying `src/index.js` to accept an options object or submit a PR.
-
-## Error handling
-
-- Network, timeout, and JSON parse errors are forwarded to `messageCallback` as objects. Inspect `message` or `error` fields to determine the type.
-- The HTTP helper functions (`SpotCoin`, `SwapCoin`, `FuturesCoin`) resolve with `{ status, data?, message }` where `status` can be `200` on success or an error code on failure.
-
-## Development & testing
-
-To run a quick smoke test, edit `index.js` at the repo root or create a small script using the Quick Start example above, then run:
-
-```bash
-node index.js
-```
-
-Make sure you have dependencies installed (the repo uses `ws` and `follow-redirects`):
+1. Install dependencies
 
 ```bash
 npm install
 ```
 
-## Contributing
+2. Run the example consumer
 
-If you want features (configurable batch size, pause/resume, metrics, or TypeScript types), open an issue or send a PR. Keep changes small and add tests/examples.
+```bash
+node index.js
+```
 
-## License
+3. Run with GC exposed (recommended for profiling memory)
 
-This project is provided under the repository license — see `LICENSE`.
+```bash
+node --expose-gc index.js
+```
 
-## Contact
+4. Use inspector for CPU/heap profiling
 
-Open issues or PRs on the GitHub repository: https://github.com/rahadiana/okx-ws-node
+```bash
+node --inspect-brk --expose-gc index.js
+# open chrome://inspect in Chrome
+```
 
+Library usage
+
+Example call (from `index.js`):
+
+```js
+const { OKXWsAggregate, SwapCoin } = require('./src');
+
+async function main() {
+  const coinList = await SwapCoin(); // no param
+  const groups = coinList.data.map(d => d.instId);
+
+  OKXWsAggregate(groups, processFunction, {
+    maxQueue: 5000,           // cap in-memory queue per connection
+    processPerTick: 2000,     // how many messages processed per tick
+    processIntervalMs: 25,    // worker tick interval (lower -> lower latency)
+    parserWorkers: 2,         // offload parsing to worker threads
+    parseBatchSize: 256,      // messages per IPC to worker
+    dropOnFull: true,
+    onStats: (s) => console.log('[ws-stats]', JSON.stringify(s))
+  });
+}
+
+main();
+```
+
+Options (summary)
+- `maxQueue` (number): maximum queued messages per connection (default `10000`).
+- `processPerTick` (number): how many messages are processed per `processIntervalMs` tick (default `1000`).
+- `processIntervalMs` (ms): interval for processing loop (default `50`).
+- `parserWorkers` (number): number of worker threads for JSON parsing; 0 means synchronous parse in main thread. Default: computed from CPU.
+- `parseBatchSize` (number): batch size sent per IPC to worker (default `256`). Larger improves throughput, increases latency slightly.
+- `dropOnFull` (bool): when queue is full drop oldest messages (`true`) or cap queue by slicing (`false`).
+- `onStats` (function): periodic report of per-connection `queued` and `dropped` counts.
+
+Why these choices
+- JSON.parse is costly and will block the event loop when message rates are high. Offloading parse to `worker_threads` and sending batches reduces the main-thread GC and CPU work.
+- Batching worker IPC reduces context-switch and serialization costs.
+- Head-indexed arrays avoid `Array.shift()` costs.
+
+Tolerant parsing
+- The worker tries multiple strategies when parsing fails:
+  - direct `JSON.parse`
+  - strip leading garbage before first `{`/`[` and retry
+  - remove trailing commas like `,]` or `,}` and retry
+  - join consecutive objects `}{` → `},{` and parse as an array
+  - fallback extraction of balanced `{...}` blocks (respecting quoted strings) and parse each
+- If reparations succeed, the worker returns parsed objects; otherwise it returns an error for that payload.
+
+Debugging / Troubleshooting
+- If you see binary blobs (`Uint8Array`) in your logs, ensure your `messageCallback` isn't `console.log`-ing Buffers directly. The library converts Buffers/Uint8Array into strings/objects before calling the callback, but you may still receive unparsed raw data if the worker couldn't recover it.
+- To inspect problematic raw blobs, run with `run-test.js` and use the inspector or add a small logging hook in the worker (not recommended in production due to high I/O cost).
+
+Profiling tips
+- Start with `parserWorkers: 2` and `parseBatchSize: 256`.
+- If parsing is CPU-bound, increase `parserWorkers` (up to `cpus - 1`) and benchmark.
+- If latency is most important, reduce `processIntervalMs` and `parseBatchSize` but watch CPU.
+- Use `node --inspect` and Chrome DevTools CPU profile to find hotspots (`JSON.parse`, worker IPC).
+
+Next steps / Improvements you can make
+- Zero-copy transfers: move to transferring ArrayBuffers to workers (requires careful buffer slicing but avoids copies).
+- Native fast JSON parsers: integrate `@simdjson/simdjson` inside worker for faster parsing.
+- If you control producer side, move to binary format (MessagePack/Protobuf/FlatBuffers) for smaller, faster payloads.
+
+Contributing
+- Please open issues or pull requests. Keep changes focused and benchmark any parser-related change.
+
+License
+- MIT (see `LICENSE`)
+
+
+---
+Generated README for the `okx-ws-node` project. If you want, I can also add a small `Makefile` or `npm` scripts to run the test and profiling commands.
 # okx-ws-node
-okx-ws-node

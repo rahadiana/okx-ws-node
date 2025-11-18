@@ -4,6 +4,10 @@
   "description": "okx-ws-node",
   "main": "./src/index.js",
   "scripts": {
+    "start": "node index.js",
+    "run-test": "node run-test.js",
+    "profile": "node --inspect-brk --expose-gc index.js",
+    "profile:run-test": "node --inspect-brk --expose-gc run-test.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "repository": {

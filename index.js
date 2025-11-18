@@ -9,7 +9,7 @@ async function name(params) {
   const coinList = await SwapCoin('asd')
 
   if(coinList.status == 200){
-    OKXWsAggregate(coinList.data.map(d=> d.instId ), processFunction);
+    Aggregate(coinList.data.map(d=> d.instId ), processFunction);
 
   }else{
     console.log(coinList)
