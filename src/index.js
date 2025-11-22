@@ -10,7 +10,7 @@ async function WsConnection(CoinArray, ChannelType, messageCallback, options = {
 
     // If no coins provided, default to BTC-USDT
     const coins = (Array.isArray(CoinArray) && CoinArray.length > 0) ? CoinArray : ["BTC-USDT"];
-    const BATCH_SIZE = 5;
+    const BATCH_SIZE = 20;
 
     function chunkArray(arr, size) {
         const chunks = [];
@@ -31,6 +31,7 @@ async function WsConnection(CoinArray, ChannelType, messageCallback, options = {
     const parserWorkers = [];
     const parserTaskQueue = [];
     const parserCallbacks = new Map();
+    const parserTimeouts = new Map();
     let nextParserId = 1;
     let scheduleParse = null;
     let numParserWorkers = opts.parserWorkers || 0;
@@ -47,12 +48,15 @@ async function WsConnection(CoinArray, ChannelType, messageCallback, options = {
         for (let i = 0; i < numParserWorkers; i++) {
             try {
                 const w = new Worker(path.join(__dirname, 'parser-worker.js'));
+                if (w.unref) try { w.unref(); } catch (e) {}
                 w._busy = false;
                 w.on('message', (msg) => {
                     try {
                         const cb = parserCallbacks.get(msg.id);
                         if (cb) {
                             parserCallbacks.delete(msg.id);
+                            const t = parserTimeouts.get(msg.id);
+                            if (t) { clearTimeout(t); parserTimeouts.delete(msg.id); }
                             cb(msg);
                         }
                     } catch (e) {}
@@ -71,6 +75,18 @@ async function WsConnection(CoinArray, ChannelType, messageCallback, options = {
             try {
                 worker._busy = true;
                 parserCallbacks.set(task.id, task.callback);
+                // create a timeout to avoid leaking callbacks if worker dies
+                const to = setTimeout(() => {
+                    try {
+                        if (parserCallbacks.has(task.id)) {
+                            const cb = parserCallbacks.get(task.id);
+                            parserCallbacks.delete(task.id);
+                            try { cb({ error: 'parser timeout' }); } catch (e) {}
+                        }
+                    } catch (e) {}
+                    parserTimeouts.delete(task.id);
+                }, opts.parserTimeoutMs || 10000);
+                parserTimeouts.set(task.id, to);
                 worker.postMessage({ id: task.id, payload: task.payload });
             } catch (e) {
                 worker._busy = false;
@@ -192,6 +208,7 @@ async function WsConnection(CoinArray, ChannelType, messageCallback, options = {
 
     function createConnection(batchCoins) {
         const key = batchCoins.join(',');
+        const subscribeMsgCache = buildSubscribeMessage(batchCoins);
         let conn = connections.get(key) || { ws: null, timer: null, backoff: reconnectInterval };
 
         function connect() {
@@ -216,12 +233,18 @@ async function WsConnection(CoinArray, ChannelType, messageCallback, options = {
             ws.once('open', () => {
                 // reset backoff after successful open
                 conn.backoff = reconnectInterval;
-                const subscribeMsg = buildSubscribeMessage(batchCoins);
-                if (ws.readyState === WebSocket.OPEN) ws.send(subscribeMsg);
+                if (ws.readyState === WebSocket.OPEN) ws.send(subscribeMsgCache);
             });
 
             ws.on('message', (data) => {
+                // ignore simple connection/heartbeat messages to avoid unnecessary queueing
                 if (data === 'Connected') return;
+                try {
+                    if ((typeof data === 'string' || Buffer.isBuffer(data)) && data.length < 8) {
+                        const s = Buffer.isBuffer(data) ? data.toString() : data;
+                        if (s === 'pong' || s === 'ping' || s === 'heartbeat') return;
+                    }
+                } catch (e) {}
                 // push raw payload (Buffer or string) into queue; parsing is deferred to the worker
                 try {
                     const raw = data; // keep Buffer as-is to avoid main-thread string allocations
@@ -233,9 +256,16 @@ async function WsConnection(CoinArray, ChannelType, messageCallback, options = {
                     qobj.arr.push(raw);
                     // enforce max queue size (measured as available items)
                     const size = qobj.arr.length - qobj.head;
+                    // notify backpressure when queue grows near capacity
+                    try {
+                        if (size > Math.floor(opts.maxQueue * 0.9) && typeof opts.onBackpressure === 'function') {
+                            try { opts.onBackpressure({ key, size }); } catch (e) {}
+                        }
+                    } catch (e) {}
                     if (size > opts.maxQueue) {
                         if (opts.dropOnFull) {
-                            // drop oldest by advancing head
+                            // drop oldest by advancing head and free reference to allow GC
+                            try { qobj.arr[qobj.head] = null; } catch (e) {}
                             qobj.head++;
                             droppedCounts.set(key, (droppedCounts.get(key) || 0) + 1);
                         } else {
@@ -298,37 +328,51 @@ async function WsConnection(CoinArray, ChannelType, messageCallback, options = {
                 });
             }
         } catch (e) {}
+        try { parserTaskQueue.length = 0; } catch (e) {}
+        try { parserCallbacks.clear && parserCallbacks.clear(); } catch (e) {}
+        try { parserTimeouts.forEach && parserTimeouts.forEach(t => clearTimeout(t)); parserTimeouts.clear && parserTimeouts.clear(); } catch (e) {}
     }
 
     if (typeof process !== 'undefined' && process && process.once) {
         process.once('exit', cleanup);
         process.once('SIGINT', () => { cleanup(); process.exit(0); });
+        // also handle SIGTERM in long-running environments
+        try { process.on && process.on('SIGTERM', () => { cleanup(); process.exit(0); }); } catch (e) {}
     }
+    // return control object so caller can close connections or read stats
+    return {
+        close: cleanup,
+        getStats: () => {
+            const stats = {};
+            messageQueues.forEach((q, k) => { stats[k] = { queued: (q && Array.isArray(q.arr) ? Math.max(0, q.arr.length - q.head) : 0), dropped: droppedCounts.get(k) || 0 }; });
+            return stats;
+        }
+    };
 }
 
 async function OKXWsAggregate(CoinArray, messageCallback, options) {
     const ChannelType = 'aggregated-trades';
-    WsConnection(CoinArray, ChannelType, messageCallback, options);
+    return WsConnection(CoinArray, ChannelType, messageCallback, options);
 }
 
 async function OKXWsIndexTickers(CoinArray, messageCallback, options) {
     const ChannelType = 'index-tickers';
-    WsConnection(CoinArray, ChannelType, messageCallback, options);
+    return WsConnection(CoinArray, ChannelType, messageCallback, options);
 }
 
 async function OKXWsMarkPrice(CoinArray, messageCallback, options) {
     const ChannelType = 'mark-price';
-    WsConnection(CoinArray, ChannelType, messageCallback, options);
+    return WsConnection(CoinArray, ChannelType, messageCallback, options);
 }
 
 async function OKXWsTickers(CoinArray, messageCallback, options) {
     const ChannelType = 'tickers';
-    WsConnection(CoinArray, ChannelType, messageCallback, options);
+    return WsConnection(CoinArray, ChannelType, messageCallback, options);
 }
 
 async function OKXWsOptimizedBooks(CoinArray, messageCallback, options) {
     const ChannelType = 'optimized-books';
-    WsConnection(CoinArray, ChannelType, messageCallback, options);
+    return WsConnection(CoinArray, ChannelType, messageCallback, options);
 }
 
 
@@ -443,4 +487,4 @@ async function OptimizedBooks(initialGroups, processFunction) {
 // {"op":"subscribe","args":[{"channel":"tickers","instId":"BTC-USDT"},{"ccy":"USDT","channel":"cup-tickers-3s"},{"channel":"mark-price","instId":"BTC-USDT"},{"channel":"index-tickers","instId":"BTC-USDT"}]}
 
 // Export the OKXWsAggregate function
-module.exports = { OKXWsAggregate, SpotCoin, SwapCoin, FuturesCoin, Aggregate, IndexTickers, Tickers, MarkPrice, OptimizedBooks };
+module.exports = { OKXWsAggregate, OKXWsIndexTickers, OKXWsMarkPrice, OKXWsTickers, OKXWsOptimizedBooks, SpotCoin, SwapCoin, FuturesCoin, Aggregate, IndexTickers, Tickers, MarkPrice, OptimizedBooks };

@@ -1,4 +1,4 @@
-const { OKXWsAggregate,SpotCoin,FuturesCoin,SwapCoin,Aggregate,IndexTickers,Tickers,MarkPrice,OptimizedBooks } = require('./src');
+const { SpotCoin,FuturesCoin,SwapCoin,Aggregate,IndexTickers,Tickers,MarkPrice,OptimizedBooks } = require('./src');
 
 // Fungsi untuk memproses setiap pesan yang diterima dari WebSocket
 function processFunction(message) {
