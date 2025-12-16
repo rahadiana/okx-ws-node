@@ -375,6 +375,11 @@ async function OKXWsOptimizedBooks(CoinArray, messageCallback, options) {
     return WsConnection(CoinArray, ChannelType, messageCallback, options);
 }
 
+async function OKXWsFundingRate(CoinArray, messageCallback, options) {
+    const ChannelType = 'funding-rate';
+    return WsConnection(CoinArray, ChannelType, messageCallback, options);
+}
+
 
 function GetCoinName($TYPE) {
     return new Promise((resolve, reject) => {
@@ -487,4 +492,4 @@ async function OptimizedBooks(initialGroups, processFunction) {
 // {"op":"subscribe","args":[{"channel":"tickers","instId":"BTC-USDT"},{"ccy":"USDT","channel":"cup-tickers-3s"},{"channel":"mark-price","instId":"BTC-USDT"},{"channel":"index-tickers","instId":"BTC-USDT"}]}
 
 // Export the OKXWsAggregate function
-module.exports = { OKXWsAggregate, OKXWsIndexTickers, OKXWsMarkPrice, OKXWsTickers, OKXWsOptimizedBooks, SpotCoin, SwapCoin, FuturesCoin, Aggregate, IndexTickers, Tickers, MarkPrice, OptimizedBooks };
+module.exports = { OKXWsFundingRate,OKXWsAggregate, OKXWsIndexTickers, OKXWsMarkPrice, OKXWsTickers, OKXWsOptimizedBooks, SpotCoin, SwapCoin, FuturesCoin, Aggregate, IndexTickers, Tickers, MarkPrice, OptimizedBooks };

@@ -1,4 +1,162 @@
 # okx-ws-node
+
+Lightweight Node.js helper to subscribe to OKX public WebSocket channels in batches — optimized for high-throughput public market data consumers.
+
+This library opens one WebSocket connection per batch of instruments (configurable batch size), handles reconnects with exponential backoff, and applies multiple memory- and CPU-safety measures to make long-running consumers stable.
+
+**Project layout**
+- [src/index.js](src/index.js) — core library and exported helpers.
+- [src/parser-worker.js](src/parser-worker.js) — tolerant JSON parser used by worker threads.
+- [index.js](index.js) — small example starter.
+- [run-test.js](run-test.js) — stress / profiling runner used to validate memory/throughput.
+
+## Instalasi
+
+```bash
+npm install
+```
+
+## Ringkasan Fitur
+
+- Batching: buka koneksi WebSocket per batch instrumen (default batch size = 20).
+- Backpressure-safe queues: head-indexed arrays untuk operasi O(1) dan kontrol ukuran dengan `maxQueue`.
+- Parser worker pool: offload `JSON.parse` ke worker threads dan kirimkan payload dalam batch untuk mengurangi IPC overhead.
+- Tolerant parsing: `parser-worker.js` mencoba recover JSON rusak dan mengekstrak objek berguna.
+- Hooks & observability: `onStats` dan `onBackpressure` untuk metrik runtime.
+- Safe cleanup: mematikan timer, socket, dan worker saat exit.
+
+## Quick Start
+
+1) Install dependencies
+
+```bash
+npm install
+```
+
+2) Jalankan contoh
+
+```bash
+node index.js
+```
+
+3) Profiling / test runner
+
+```bash
+npm run run-test
+```
+
+## API Reference
+
+Semua fungsi utama diekspor di `src/index.js`. Fungsi-fungsi ini memulai koneksi WebSocket ke kanal OKX yang relevan dan menerima callback pesan.
+
+- `OKXWsAggregate(coinArray, messageCallback, options)` — subscribe ke kanal `aggregated-trades`.
+- `OKXWsIndexTickers(coinArray, messageCallback, options)` — subscribe ke kanal `index-tickers`.
+- `OKXWsMarkPrice(coinArray, messageCallback, options)` — subscribe ke kanal `mark-price`.
+- `OKXWsTickers(coinArray, messageCallback, options)` — subscribe ke kanal `tickers`.
+- `OKXWsOptimizedBooks(coinArray, messageCallback, options)` — subscribe ke kanal `optimized-books`.
+- `OKXWsFundingRate(coinArray, messageCallback, options)` — subscribe ke kanal `funding-rate`.
+
+Kembalian dari fungsi-fungsi `OKXWs*` adalah objek kontrol dengan minimal API:
+
+- `close()` — hentikan koneksi dan bersihkan resource.
+- `getStats()` — dapatkan statistik antrian per-batch (queued/dropped).
+
+Alias helper (fetch instrumen):
+
+- `SpotCoin()` — ambil daftar produk SPOT dari OKX.
+- `SwapCoin()` — ambil daftar produk SWAP dari OKX.
+- `FuturesCoin()` — ambil daftar produk FUTURES dari OKX.
+
+Helper convenience wrappers (memanggil `OKXWs*` lalu meneruskan pesan ke `processFunction`):
+
+- `Aggregate(initialGroups, processFunction)`
+- `IndexTickers(initialGroups, processFunction)`
+- `MarkPrice(initialGroups, processFunction)`
+- `Tickers(initialGroups, processFunction)`
+- `OptimizedBooks(initialGroups, processFunction)`
+
+### Contoh penggunaan
+
+```js
+const { OKXWsAggregate, SwapCoin } = require('./src');
+
+async function main() {
+  const coinList = await SwapCoin();
+  if (!coinList || coinList.status !== 200) throw new Error('failed to fetch swaps');
+
+  const groups = coinList.data.map(d => d.instId);
+
+  const controller = await OKXWsAggregate(groups, (message) => {
+    // lakukan pemrosesan ringan dan non-blocking di sini
+  }, {
+    maxQueue: 5000,
+    processPerTick: 2000,
+    processIntervalMs: 25,
+    parserWorkers: 2,
+    parseBatchSize: 256,
+    dropOnFull: true,
+    parserTimeoutMs: 10000,
+    onStats: (s) => console.log('[ws-stats]', JSON.stringify(s)),
+    onBackpressure: ({ key, size }) => console.warn('backpressure', key, size)
+  });
+
+  // controller.close(); // hentikan ketika perlu
+}
+
+main();
+```
+
+## Opsi (ringkasan dan nilai default)
+
+- `maxQueue` (number) — maksimum pesan yang disimpan per koneksi (default `10000`).
+- `processPerTick` (number) — berapa banyak pesan diproses tiap tick (default `1000`).
+- `processIntervalMs` (number) — interval pemrosesan (ms) (default `50`).
+- `statsIntervalMs` (number) — interval pelaporan `onStats` (ms) (default `60000`).
+- `parserWorkers` (number) — jumlah worker threads untuk parsing; jika `0`, parsing dilakukan sinkron di main thread. Default: dihitung dari CPU jika tidak di-set.
+- `parseBatchSize` (number) — ukuran batch yang dikirim ke worker untuk parsing (default `256`).
+- `parserTimeoutMs` (number) — timeout ms sebelum callback parser dianggap gagal (default `10000`).
+- `dropOnFull` (boolean) — saat antrian penuh, `true` = drop terlama (default `true`), `false` = potong slice terakhir.
+- `onStats` (function) — callback periodik menerima objek stats per-batch.
+- `onBackpressure` (function) — dipanggil saat antrian > ~90% `maxQueue`.
+
+## Desain & Perilaku Penting
+
+- Queue menggunakan head-indexed array untuk menghindari biaya `Array.shift()` dan memungkinkan kompaksi periodik.
+- Payload diterima sebagai Buffer/Uint8Array bila memungkinkan dan hanya diubah menjadi string/JSON di tahap parsing.
+- Jika worker threads tersedia, parsing dilakukan asinkron di worker untuk mengurangi GC dan beban CPU pada main thread.
+- Koneksi melakukan reconnect dengan exponential backoff; subscribe message di-cache per-batch untuk efisiensi.
+
+## Parser Worker (tolerant parsing)
+
+`src/parser-worker.js` mencoba beberapa teknik untuk memulihkan atau mengekstrak objek JSON dari payload yang bermasalah:
+
+- Parsing cepat `JSON.parse`.
+- Menghapus karakter sebelum `{` atau `[` pertama.
+- Memperbaiki trailing commas.
+- Menggabungkan objek-objek terpisah menjadi array.
+- Mengekstrak objek berimbang dari payload bila mungkin.
+
+Hasil parsing bisa berupa objek tunggal, array objek (untuk batch), atau error.
+
+## Debugging & Profiling
+
+- Gunakan `run-test.js` untuk contoh runner yang memonitor memory dan statistik.
+- Untuk profiling mendalam jalankan Node dengan flag `--inspect` dan/atau `--expose-gc`.
+
+## Contoh menjalankan profiling
+
+```bash
+node --inspect-brk --expose-gc run-test.js
+```
+
+## Kontribusi
+
+Silakan buka issue atau PR. Perubahan pada parser harus disertai benchmark sederhana.
+
+## Lisensi
+
+MIT (lihat LICENSE)
+# okx-ws-node
 Lightweight Node.js helper to subscribe to OKX public WebSocket channels in batches.
 
 This module opens one WebSocket connection per batch of instruments (batch size configurable), automatically reconnects with exponential backoff, and includes memory-safety measures (cleanup of listeners/timers) to avoid leaks when subscribing to many instruments.

@@ -1,4 +1,4 @@
-const { SpotCoin,FuturesCoin,SwapCoin,Aggregate,IndexTickers,Tickers,MarkPrice,OptimizedBooks } = require('./src');
+const { OKXWsFundingRate,SpotCoin,FuturesCoin,SwapCoin,Aggregate,IndexTickers,Tickers,MarkPrice,OptimizedBooks } = require('./src');
 
 // Fungsi untuk memproses setiap pesan yang diterima dari WebSocket
 function processFunction(message) {
@@ -9,7 +9,7 @@ async function name(params) {
   const coinList = await SwapCoin('asd')
 
   if(coinList.status == 200){
-    Aggregate(coinList.data.map(d=> d.instId ), processFunction);
+    OKXWsFundingRate(coinList.data.map(d=> d.instId ), processFunction);
 
   }else{
     console.log(coinList)
