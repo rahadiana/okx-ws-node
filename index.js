@@ -1,4 +1,4 @@
-const { OKXWsFundingRate,SpotCoin,FuturesCoin,SwapCoin,Aggregate,IndexTickers,Tickers,MarkPrice,OptimizedBooks } = require('./src');
+const { ApiPublic,OKXWsFundingRate,SpotCoin,FuturesCoin,SwapCoin,Aggregate,IndexTickers,Tickers,MarkPrice,OptimizedBooks } = require('./src');
 
 // Fungsi untuk memproses setiap pesan yang diterima dari WebSocket
 function processFunction(message) {
@@ -6,10 +6,11 @@ function processFunction(message) {
  }
 
 async function name(params) {
-  const coinList = await SwapCoin('asd')
+  const coinList = await ApiPublic.Instrument('swap',1);
 
   if(coinList.status == 200){
-    OKXWsFundingRate(coinList.data.map(d=> d.instId ), processFunction);
+    Tickers(coinList.data.map(d=> d.instId ), processFunction);
+    // console.log(coinList)
 
   }else{
     console.log(coinList)
