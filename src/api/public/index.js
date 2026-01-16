@@ -294,7 +294,7 @@ function deliveryExerciseHistory($instType, instFamily) {
 }
 
 
-function EstimatedSettlementInfo($instId) {
+function EstimatedSettlementInfo(instId) {
 
     if (!$instId) {
         return { status: 400, message: 'Instrument ID  is required' };
