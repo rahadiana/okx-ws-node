@@ -277,30 +277,30 @@ function EstimatedPrice($CoinName) {
     return CallHttp(`estimated-price?instId=${$CoinName}`);
 }
 
-function deliveryExerciseHistory($instType, instFamily) {
+function deliveryExerciseHistory(instType, instFamily) {
 
-    if (!$instType) {
+    if (!instType) {
         return { status: 400, message: 'Instrument type is required' };
     }
     if (!instFamily) {
         return { status: 400, message: 'Instrument family is required' };
     }
 
-    if (!$instType || !instFamily) {
+    if (!instType || !instFamily) {
         return { status: 400, message: 'instType and instFamily are required' };
     }
 
-    return CallHttp(`delivery-exercise-history?instType=${$instType}&instFamily=${instFamily}&limit=100`);
+    return CallHttp(`delivery-exercise-history?instType=${instType}&instFamily=${instFamily}&limit=100`);
 }
 
 
 function EstimatedSettlementInfo(instId) {
 
-    if (!$instId) {
+    if (!instId) {
         return { status: 400, message: 'Instrument ID  is required' };
     }
 
-    return CallHttp(`estimated-settlement-info?instId=${$instId}`);
+    return CallHttp(`estimated-settlement-info?instId=${instId}`);
 }
 
 
