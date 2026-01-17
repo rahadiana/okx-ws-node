@@ -1,5 +1,40 @@
 const { parentPort } = require('worker_threads');
 
+// startup log for easier tracing
+try {
+    console.log('parser worker started');
+} catch (e) { }
+
+// report errors to parent before exiting so the main thread can log/restart
+function _reportWorkerError(err, type) {
+    try {
+        const payload = {
+            __worker_error: true,
+            type: type || 'error',
+            message: err && err.message ? err.message : String(err),
+            stack: err && err.stack ? err.stack : undefined
+        };
+        if (parentPort && parentPort.postMessage) {
+            try { parentPort.postMessage(payload); } catch (e) { }
+        } else {
+            try { console.error('Worker error:', payload); } catch (e) { }
+        }
+    } catch (e) { }
+    // give a short delay to ensure message is sent
+    try { setTimeout(() => process.exit(1), 50); } catch (e) { process.exit(1); }
+}
+
+process.on('uncaughtException', (err) => {
+    try { _reportWorkerError(err, 'uncaughtException'); } catch (e) { try { process.exit(1); } catch (e) { } }
+});
+
+process.on('unhandledRejection', (reason) => {
+    try {
+        const err = (reason instanceof Error) ? reason : new Error(typeof reason === 'string' ? reason : JSON.stringify(reason));
+        _reportWorkerError(err, 'unhandledRejection');
+    } catch (e) { try { process.exit(1); } catch (e) { } }
+});
+
 function tryParseOne(payload) {
     // normalize payload to string and apply tolerant parsing
     try {
