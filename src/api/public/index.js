@@ -20,9 +20,9 @@ function CallHttp($Query) {
             res.on('end', () => {
                 try {
                     const parsed = JSON.parse(data);
-                    resolve({ status: 200, data: parsed.data, message: 'success' });
+                    resolve(parsed);
                 } catch (e) {
-                    resolve({ status: 500, message: 'Invalid JSON response' });
+                    resolve({ status: 500, message: e});
                 }
             });
         });
@@ -40,7 +40,7 @@ function CallHttp($Query) {
     });
 }
 
-function marketDataHistory({ module, instType, instIdList, instFamilyList, dateAggrType, begin, end }) {
+function marketDataHistory(module, instType, instIdList, instFamilyList, dateAggrType, begin, end) {
     if (!module) {
         return { status: 400, message: 'module is required' };
     }
@@ -63,9 +63,9 @@ function marketDataHistory({ module, instType, instIdList, instFamilyList, dateA
     `end=${encodeURIComponent(end)}`];
     if (instIdList) params.push(`instIdList=${encodeURIComponent(instIdList)}`);
     if (instFamilyList) params.push(`instFamilyList=${encodeURIComponent(instFamilyList)}`);
-    return CallHttp(`market-data-history?${params.join('&')}`);
+    return CallHttp(`../../../api/v5/public/market-data-history?${params.join('&')}`);
 }
-function economicCalendar({ region, importance, before, after, limit } = {}) {
+function economicCalendar(region, importance, before, after, limit) {
     let params = [];
     if (region) params.push(`region=${encodeURIComponent(region)}`);
     if (importance) params.push(`importance=${encodeURIComponent(importance)}`);
@@ -73,18 +73,18 @@ function economicCalendar({ region, importance, before, after, limit } = {}) {
     if (after) params.push(`after=${encodeURIComponent(after)}`);
     if (limit) params.push(`limit=${encodeURIComponent(limit)}`);
     const query = params.length ? `?${params.join('&')}` : '';
-    return CallHttp(`economic-calendar${query}`);
+    return CallHttp(`../../../api/v5/public/economic-calendar${query}`);
 }
 function indexComponents(index) {
     if (!index) {
         return { status: 400, message: 'index is required' };
     }
-    return CallHttp(`../market/index-components?index=${encodeURIComponent(index)}`);
+    return CallHttp(`../../../api/v5/market/index-components?index=${encodeURIComponent(index)}`);
 }
 function exchangeRate() {
-    return CallHttp('../market/exchange-rate');
+    return CallHttp('../../../api/v5/market/exchange-rate');
 }
-function historyMarkPriceCandles({ instId, after, before, bar, limit }) {
+function historyMarkPriceCandles(instId, after, before, bar, limit) {
     if (!instId) {
         return { status: 400, message: 'instId is required' };
     }
@@ -95,7 +95,7 @@ function historyMarkPriceCandles({ instId, after, before, bar, limit }) {
     if (limit) params.push(`limit=${encodeURIComponent(limit)}`);
     return CallHttp(`../market/history-mark-price-candles?${params.join('&')}`);
 }
-function markPriceCandles({ instId, after, before, bar, limit }) {
+function markPriceCandles(instId, after, before, bar, limit) {
     if (!instId) {
         return { status: 400, message: 'instId is required' };
     }
@@ -106,7 +106,7 @@ function markPriceCandles({ instId, after, before, bar, limit }) {
     if (limit) params.push(`limit=${encodeURIComponent(limit)}`);
     return CallHttp(`../market/mark-price-candles?${params.join('&')}`);
 }
-function historyIndexCandles({ instId, after, before, bar, limit }) {
+function historyIndexCandles(instId, after, before, bar, limit) {
     if (!instId) {
         return { status: 400, message: 'instId is required' };
     }
@@ -117,7 +117,7 @@ function historyIndexCandles({ instId, after, before, bar, limit }) {
     if (limit) params.push(`limit=${encodeURIComponent(limit)}`);
     return CallHttp(`../market/history-index-candles?${params.join('&')}`);
 }
-function indexCandles({ instId, after, before, bar, limit }) {
+function indexCandles(instId, after, before, bar, limit) {
     if (!instId) {
         return { status: 400, message: 'instId is required' };
     }
@@ -128,7 +128,7 @@ function indexCandles({ instId, after, before, bar, limit }) {
     if (limit) params.push(`limit=${encodeURIComponent(limit)}`);
     return CallHttp(`../market/index-candles?${params.join('&')}`);
 }
-function indexTickers({ quoteCcy, instId }) {
+function indexTickers(quoteCcy, instId) {
     if (!quoteCcy && !instId) {
         return { status: 400, message: 'Either quoteCcy or instId is required' };
     }
@@ -155,7 +155,7 @@ function instrumentTickBands(instType, instFamily) {
     if (instFamily) params.push(`instFamily=${encodeURIComponent(instFamily)}`);
     return CallHttp(`instrument-tick-bands?${params.join('&')}`);
 }
-function convertContractCoin({ instId, sz, px, type, unit, opType }) {
+function convertContractCoin(instId, sz, px, type, unit, opType) {
     if (!instId) {
         return { status: 400, message: 'Instrument ID is required' };
     }
@@ -169,7 +169,7 @@ function convertContractCoin({ instId, sz, px, type, unit, opType }) {
     if (opType) params.push(`opType=${encodeURIComponent(opType)}`);
     return CallHttp(`convert-contract-coin?${params.join('&')}`);
 }
-function insuranceFund({ instType, type, instFamily, ccy, before, after, limit }) {
+function insuranceFund(instType, type, instFamily, ccy, before, after, limit) {
     if (!instType) {
         return { status: 400, message: 'Instrument type is required' };
     }
