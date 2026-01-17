@@ -74,7 +74,8 @@ async function WsConnection(CoinArray, ChannelType, messageCallback, options = {
         }
 
         if (workerExists) {
-            for (let i = 0; i < numParserWorkers; i++) {
+            // createParserWorker: encapsulate worker creation, logging and restart-on-failure
+            function createParserWorker() {
                 try {
                     const w = new Worker(workerPath);
                     if (w.unref) try { w.unref(); } catch (e) { }
@@ -100,20 +101,41 @@ async function WsConnection(CoinArray, ChannelType, messageCallback, options = {
                     });
 
                     w.on('error', (err) => {
-                        console.error('Parser worker error:', err);
+                        try {
+                            console.error('Parser worker error:', err && err.stack ? err.stack : err);
+                        } catch (e) { }
                         w._busy = false;
                     });
 
                     w.on('exit', (code) => {
-                        if (code !== 0) console.warn('Parser worker exit:', code);
+                        try {
+                            const idInfo = (w.threadId !== undefined) ? (' threadId=' + w.threadId) : '';
+                            console.warn('Parser worker exit: code=' + code + idInfo);
+                        } catch (e) { }
                         w._busy = false;
+
+                        // remove from pool
+                        try {
+                            const idx = parserWorkers.indexOf(w);
+                            if (idx !== -1) parserWorkers.splice(idx, 1);
+                        } catch (e) { }
+
+                        // restart non-zero-exit workers unless cleanup is running
+                        if (code !== 0 && !cleanupCalled) {
+                            const retryDelay = Math.min(3000, reconnectInterval * 2) || 500;
+                            setTimeout(() => {
+                                try { createParserWorker(); } catch (e) { console.warn('Failed to restart parser worker:', e && e.message ? e.message : e); }
+                            }, retryDelay);
+                        }
                     });
 
                     parserWorkers.push(w);
                 } catch (e) {
-                    console.warn('Failed to create parser worker:', e.message);
+                    console.warn('Failed to create parser worker:', e && e.message ? e.message : e);
                 }
             }
+
+            for (let i = 0; i < numParserWorkers; i++) createParserWorker();
         }
 
         function assignTask(worker, task) {
