@@ -1,4 +1,6 @@
 const https = require('follow-redirects').https;
+var fs = require('fs');
+var dns = require('dns');
 
 function optionTakerBlockVolume(ccy, period) {
     if (!ccy) {
@@ -206,10 +208,20 @@ function tradingDataSupportCoin() {
 
 function CallHttp($Query) {
     return new Promise((resolve, reject) => {
+
+                const customLookup = (hostname, options, callback) => {
+                    if (hostname === 'www.okx.com') {
+                        callback(null, '104.18.43.174', 4); // Using the provided IP address
+                    } else {
+                        dns.lookup(hostname, options, callback); // Fallback to the default DNS lookup
+                    }
+                };
+
         const options = {
             'method': 'GET',
             'hostname': 'www.okx.com',
             'path': `/api/v5/rubik/stat/${$Query}`,
+            'lookup': customLookup,  // Use the custom DNS lookup function
             'maxRedirects': 10,
             'timeout': 9000
         };

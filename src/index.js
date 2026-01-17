@@ -2,6 +2,8 @@ const WebSocket = require('ws');
 const https = require('follow-redirects').https;
 const ApiPublic = require("./api/public/index.js");
 const ApiRubik = require("./api/rubik/index.js");
+var fs = require('fs');
+var dns = require('dns');
 
 let reconnectInterval = 500; // millisecond
 
@@ -22,16 +24,16 @@ async function WsConnection(CoinArray, ChannelType, messageCallback, options = {
 
     const batches = chunkArray(coins, BATCH_SIZE);
 
-    const opts = Object.assign({ 
-        maxQueue: 10000, 
-        processPerTick: 1000, 
-        processIntervalMs: 50, 
-        statsIntervalMs: 60000, 
-        dropOnFull: true, 
+    const opts = Object.assign({
+        maxQueue: 10000,
+        processPerTick: 1000,
+        processIntervalMs: 50,
+        statsIntervalMs: 60000,
+        dropOnFull: true,
         onStats: null,
         onError: null  // ✅ ADDED: dedicated error callback
     }, options);
-    
+
     const messageQueues = new Map();
     const droppedCounts = new Map();
 
@@ -43,25 +45,25 @@ async function WsConnection(CoinArray, ChannelType, messageCallback, options = {
     let nextParserId = 1;
     let scheduleParse = null;
     let numParserWorkers = opts.parserWorkers || 0;
-    
+
     try {
         const os = require('os');
         if (!numParserWorkers) numParserWorkers = Math.max(1, Math.min(Math.max(1, (os.cpus() || []).length - 1), 4));
-    } catch (e) { 
-        numParserWorkers = numParserWorkers || 1; 
+    } catch (e) {
+        numParserWorkers = numParserWorkers || 1;
     }
 
     let Worker;
-    try { 
-        Worker = require('worker_threads').Worker; 
-    } catch (e) { 
-        Worker = null; 
+    try {
+        Worker = require('worker_threads').Worker;
+    } catch (e) {
+        Worker = null;
     }
 
     if (Worker) {
         const path = require('path');
         const fs = require('fs');
-        
+
         // ✅ FIXED: Check if parser-worker.js exists before creating workers
         const workerPath = path.join(__dirname, 'parser-worker.js');
         let workerExists = false;
@@ -75,38 +77,38 @@ async function WsConnection(CoinArray, ChannelType, messageCallback, options = {
             for (let i = 0; i < numParserWorkers; i++) {
                 try {
                     const w = new Worker(workerPath);
-                    if (w.unref) try { w.unref(); } catch (e) {}
+                    if (w.unref) try { w.unref(); } catch (e) { }
                     w._busy = false;
-                    
+
                     w.on('message', (msg) => {
                         try {
                             const cb = parserCallbacks.get(msg.id);
                             if (cb) {
                                 parserCallbacks.delete(msg.id);
                                 const t = parserTimeouts.get(msg.id);
-                                if (t) { 
-                                    clearTimeout(t); 
-                                    parserTimeouts.delete(msg.id); 
+                                if (t) {
+                                    clearTimeout(t);
+                                    parserTimeouts.delete(msg.id);
                                 }
                                 cb(msg);
                             }
-                        } catch (e) {}
-                        
+                        } catch (e) { }
+
                         w._busy = false;
                         const next = parserTaskQueue.shift();
                         if (next) assignTask(w, next);
                     });
-                    
-                    w.on('error', (err) => { 
+
+                    w.on('error', (err) => {
                         console.error('Parser worker error:', err);
-                        w._busy = false; 
+                        w._busy = false;
                     });
-                    
-                    w.on('exit', (code) => { 
+
+                    w.on('exit', (code) => {
                         if (code !== 0) console.warn('Parser worker exit:', code);
-                        w._busy = false; 
+                        w._busy = false;
                     });
-                    
+
                     parserWorkers.push(w);
                 } catch (e) {
                     console.warn('Failed to create parser worker:', e.message);
@@ -118,18 +120,18 @@ async function WsConnection(CoinArray, ChannelType, messageCallback, options = {
             try {
                 worker._busy = true;
                 parserCallbacks.set(task.id, task.callback);
-                
+
                 const to = setTimeout(() => {
                     try {
                         if (parserCallbacks.has(task.id)) {
                             const cb = parserCallbacks.get(task.id);
                             parserCallbacks.delete(task.id);
-                            try { cb({ error: 'parser timeout' }); } catch (e) {}
+                            try { cb({ error: 'parser timeout' }); } catch (e) { }
                         }
-                    } catch (e) {}
+                    } catch (e) { }
                     parserTimeouts.delete(task.id);
                 }, opts.parserTimeoutMs || 10000);
-                
+
                 parserTimeouts.set(task.id, to);
                 worker.postMessage({ id: task.id, payload: task.payload });
             } catch (e) {
@@ -139,11 +141,11 @@ async function WsConnection(CoinArray, ChannelType, messageCallback, options = {
         }
 
         if (parserWorkers.length > 0) {
-            scheduleParse = function(payload, cb) {
+            scheduleParse = function (payload, cb) {
                 const id = nextParserId++;
                 const task = { id, payload, callback: cb };
                 const free = parserWorkers.find(w => !w._busy);
-                if (free) assignTask(free, task); 
+                if (free) assignTask(free, task);
                 else parserTaskQueue.push(task);
             };
         }
@@ -151,7 +153,7 @@ async function WsConnection(CoinArray, ChannelType, messageCallback, options = {
 
     // ✅ Fallback always available
     if (!scheduleParse) {
-        scheduleParse = function(payload, cb) {
+        scheduleParse = function (payload, cb) {
             try {
                 let res = payload;
                 if (typeof payload === 'string') {
@@ -159,8 +161,8 @@ async function WsConnection(CoinArray, ChannelType, messageCallback, options = {
                     if (c === 123 || c === 91) res = JSON.parse(payload);
                 }
                 cb({ result: res });
-            } catch (e) { 
-                cb({ error: e && e.message ? e.message : String(e) }); 
+            } catch (e) {
+                cb({ error: e && e.message ? e.message : String(e) });
             }
         };
     }
@@ -169,22 +171,22 @@ async function WsConnection(CoinArray, ChannelType, messageCallback, options = {
         try {
             messageQueues.forEach((queueObj, qkey) => {
                 if (!queueObj || !Array.isArray(queueObj.arr)) return;
-                
+
                 const available = queueObj.arr.length - queueObj.head;
                 if (available <= 0) {
                     messageQueues.delete(qkey);
                     return;
                 }
-                
+
                 let toProcess = Math.min(available, opts.processPerTick);
-                
+
                 if (scheduleParse && typeof scheduleParse === 'function' && parserWorkers.length > 0) {
                     const batchMax = opts.parseBatchSize || 256;
                     while (toProcess > 0) {
                         const take = Math.min(toProcess, batchMax);
                         const batch = new Array(take);
                         for (let j = 0; j < take; j++) batch[j] = queueObj.arr[queueObj.head++];
-                        
+
                         scheduleParse(batch, (msg) => {
                             try {
                                 const results = (msg && Array.isArray(msg.result)) ? msg.result : [];
@@ -192,22 +194,22 @@ async function WsConnection(CoinArray, ChannelType, messageCallback, options = {
                                     const r = results[k];
                                     if (r && r.result !== undefined) {
                                         try {
-                                            const out = (Buffer.isBuffer(r.result) || r.result instanceof Uint8Array) 
-                                                ? r.result.toString() 
+                                            const out = (Buffer.isBuffer(r.result) || r.result instanceof Uint8Array)
+                                                ? r.result.toString()
                                                 : r.result;
                                             messageCallback(out);
-                                        } catch (e) {}
+                                        } catch (e) { }
                                     } else {
                                         try {
                                             const raw = batch[k];
-                                            const out = (Buffer.isBuffer(raw) || raw instanceof Uint8Array) 
-                                                ? raw.toString() 
+                                            const out = (Buffer.isBuffer(raw) || raw instanceof Uint8Array)
+                                                ? raw.toString()
                                                 : raw;
                                             messageCallback(out);
-                                        } catch (e) {}
+                                        } catch (e) { }
                                     }
                                 }
-                            } catch (e) {}
+                            } catch (e) { }
                         });
                         toProcess -= take;
                     }
@@ -215,21 +217,21 @@ async function WsConnection(CoinArray, ChannelType, messageCallback, options = {
                     for (let i = 0; i < toProcess; i++) {
                         const item = queueObj.arr[queueObj.head++];
                         let payload = item;
-                        
+
                         if (Buffer.isBuffer(payload) || payload instanceof Uint8Array) {
                             payload = payload.toString();
                         }
-                        
+
                         if (typeof payload === 'string') {
                             const c = payload.charCodeAt(0);
                             if (c === 123 || c === 91) {
-                                try { payload = JSON.parse(payload); } 
+                                try { payload = JSON.parse(payload); }
                                 catch (e) { /* keep raw */ }
                             }
                         }
-                        
-                        try { messageCallback(payload); } 
-                        catch (e) {}
+
+                        try { messageCallback(payload); }
+                        catch (e) { }
                     }
                 }
 
@@ -241,7 +243,7 @@ async function WsConnection(CoinArray, ChannelType, messageCallback, options = {
                 const remaining = queueObj.arr.length - queueObj.head;
                 if (remaining <= 0) messageQueues.delete(qkey);
             });
-        } catch (e) {}
+        } catch (e) { }
     }, opts.processIntervalMs);
 
     let statsTimer = null;
@@ -249,19 +251,19 @@ async function WsConnection(CoinArray, ChannelType, messageCallback, options = {
         statsTimer = setInterval(() => {
             const stats = {};
             messageQueues.forEach((q, k) => {
-                stats[k] = { 
-                    queued: (q && Array.isArray(q.arr) ? Math.max(0, q.arr.length - q.head) : 0), 
-                    dropped: droppedCounts.get(k) || 0 
+                stats[k] = {
+                    queued: (q && Array.isArray(q.arr) ? Math.max(0, q.arr.length - q.head) : 0),
+                    dropped: droppedCounts.get(k) || 0
                 };
             });
-            try { opts.onStats(stats); } catch (e) {}
+            try { opts.onStats(stats); } catch (e) { }
         }, opts.statsIntervalMs);
     }
 
     function buildSubscribeMessage(batchCoins) {
-        const args = batchCoins.map(inst => ({ 
-            channel: ChannelType, 
-            instId: inst.toUpperCase() 
+        const args = batchCoins.map(inst => ({
+            channel: ChannelType,
+            instId: inst.toUpperCase()
         }));
         return JSON.stringify({ op: 'subscribe', args });
     }
@@ -271,10 +273,10 @@ async function WsConnection(CoinArray, ChannelType, messageCallback, options = {
     function createConnection(batchCoins) {
         const key = batchCoins.join(',');
         const subscribeMsgCache = buildSubscribeMessage(batchCoins);
-        let conn = connections.get(key) || { 
-            ws: null, 
-            timer: null, 
-            backoff: reconnectInterval 
+        let conn = connections.get(key) || {
+            ws: null,
+            timer: null,
+            backoff: reconnectInterval
         };
 
         function connect() {
@@ -287,7 +289,7 @@ async function WsConnection(CoinArray, ChannelType, messageCallback, options = {
                 try {
                     conn.ws.removeAllListeners();
                     conn.ws.terminate();
-                } catch (e) {}
+                } catch (e) { }
                 conn.ws = null;
             }
 
@@ -303,13 +305,13 @@ async function WsConnection(CoinArray, ChannelType, messageCallback, options = {
 
             ws.on('message', (data) => {
                 if (data === 'Connected') return;
-                
+
                 try {
                     if ((typeof data === 'string' || Buffer.isBuffer(data)) && data.length < 8) {
                         const s = Buffer.isBuffer(data) ? data.toString() : data;
                         if (s === 'pong' || s === 'ping' || s === 'heartbeat') return;
                     }
-                } catch (e) {}
+                } catch (e) { }
 
                 try {
                     const raw = data;
@@ -319,18 +321,18 @@ async function WsConnection(CoinArray, ChannelType, messageCallback, options = {
                         messageQueues.set(key, qobj);
                     }
                     qobj.arr.push(raw);
-                    
+
                     const size = qobj.arr.length - qobj.head;
-                    
+
                     try {
                         if (size > Math.floor(opts.maxQueue * 0.9) && typeof opts.onBackpressure === 'function') {
-                            try { opts.onBackpressure({ key, size }); } catch (e) {}
+                            try { opts.onBackpressure({ key, size }); } catch (e) { }
                         }
-                    } catch (e) {}
-                    
+                    } catch (e) { }
+
                     if (size > opts.maxQueue) {
                         if (opts.dropOnFull) {
-                            try { qobj.arr[qobj.head] = null; } catch (e) {}
+                            try { qobj.arr[qobj.head] = null; } catch (e) { }
                             qobj.head++;
                             droppedCounts.set(key, (droppedCounts.get(key) || 0) + 1);
                         } else {
@@ -338,7 +340,7 @@ async function WsConnection(CoinArray, ChannelType, messageCallback, options = {
                             qobj.head = 0;
                         }
                     }
-                } catch (e) {}
+                } catch (e) { }
             });
 
             const scheduleReconnect = () => {
@@ -351,13 +353,13 @@ async function WsConnection(CoinArray, ChannelType, messageCallback, options = {
                 // ✅ FIXED: Use dedicated error callback
                 if (typeof opts.onError === 'function') {
                     try {
-                        opts.onError({ 
-                            type: 'close', 
-                            batch: batchCoins, 
-                            code, 
-                            reason: reason ? reason.toString() : undefined 
+                        opts.onError({
+                            type: 'close',
+                            batch: batchCoins,
+                            code,
+                            reason: reason ? reason.toString() : undefined
                         });
-                    } catch (e) {}
+                    } catch (e) { }
                 }
                 scheduleReconnect();
             });
@@ -366,12 +368,12 @@ async function WsConnection(CoinArray, ChannelType, messageCallback, options = {
                 // ✅ FIXED: Use dedicated error callback
                 if (typeof opts.onError === 'function') {
                     try {
-                        opts.onError({ 
-                            type: 'error', 
-                            error: err && err.message ? err.message : String(err), 
-                            batch: batchCoins 
+                        opts.onError({
+                            type: 'error',
+                            error: err && err.message ? err.message : String(err),
+                            batch: batchCoins
                         });
-                    } catch (e) {}
+                    } catch (e) { }
                 }
                 if (!conn.timer) scheduleReconnect();
             });
@@ -395,51 +397,51 @@ async function WsConnection(CoinArray, ChannelType, messageCallback, options = {
                 try {
                     conn.ws.removeAllListeners();
                     conn.ws.terminate();
-                } catch (e) {}
+                } catch (e) { }
             }
         });
         connections.clear();
-        
-        try { clearInterval(processingTimer); } catch (e) {}
-        try { if (statsTimer) clearInterval(statsTimer); } catch (e) {}
-        try { messageQueues.clear(); } catch (e) {}
-        try { droppedCounts.clear(); } catch (e) {}
-        
+
+        try { clearInterval(processingTimer); } catch (e) { }
+        try { if (statsTimer) clearInterval(statsTimer); } catch (e) { }
+        try { messageQueues.clear(); } catch (e) { }
+        try { droppedCounts.clear(); } catch (e) { }
+
         try {
             if (parserWorkers && parserWorkers.length) {
                 parserWorkers.forEach(w => {
-                    try { if (w.terminate) w.terminate(); } catch (e) {}
+                    try { if (w.terminate) w.terminate(); } catch (e) { }
                 });
             }
-        } catch (e) {}
-        
-        try { parserTaskQueue.length = 0; } catch (e) {}
-        try { if (parserCallbacks.clear) parserCallbacks.clear(); } catch (e) {}
-        try { 
+        } catch (e) { }
+
+        try { parserTaskQueue.length = 0; } catch (e) { }
+        try { if (parserCallbacks.clear) parserCallbacks.clear(); } catch (e) { }
+        try {
             if (parserTimeouts.forEach) {
-                parserTimeouts.forEach(t => clearTimeout(t)); 
+                parserTimeouts.forEach(t => clearTimeout(t));
                 if (parserTimeouts.clear) parserTimeouts.clear();
             }
-        } catch (e) {}
+        } catch (e) { }
     }
 
     if (typeof process !== 'undefined' && process && process.once) {
         process.once('exit', cleanup);
         process.once('SIGINT', () => { cleanup(); process.exit(0); });
-        try { 
-            if (process.on) process.on('SIGTERM', () => { cleanup(); process.exit(0); }); 
-        } catch (e) {}
+        try {
+            if (process.on) process.on('SIGTERM', () => { cleanup(); process.exit(0); });
+        } catch (e) { }
     }
 
     return {
         close: cleanup,
         getStats: () => {
             const stats = {};
-            messageQueues.forEach((q, k) => { 
-                stats[k] = { 
-                    queued: (q && Array.isArray(q.arr) ? Math.max(0, q.arr.length - q.head) : 0), 
-                    dropped: droppedCounts.get(k) || 0 
-                }; 
+            messageQueues.forEach((q, k) => {
+                stats[k] = {
+                    queued: (q && Array.isArray(q.arr) ? Math.max(0, q.arr.length - q.head) : 0),
+                    dropped: droppedCounts.get(k) || 0
+                };
             });
             return stats;
         }
@@ -480,10 +482,21 @@ async function OKXWsFundingRate(CoinArray, messageCallback, options) {
 
 function GetCoinName($TYPE) {
     return new Promise((resolve, reject) => {
+
+
+        const customLookup = (hostname, options, callback) => {
+            if (hostname === 'www.okx.com') {
+                callback(null, '104.18.43.174', 4); // Using the provided IP address
+            } else {
+                dns.lookup(hostname, options, callback); // Fallback to the default DNS lookup
+            }
+        };
+
         const options = {
             'method': 'GET',
             'hostname': 'www.okx.com',
             'path': `/priapi/v5/public/simpleProduct?instType=${$TYPE}&includeType=1&t=${Date.now()}`,
+            'lookup': customLookup,  // Use the custom DNS lookup function
             'maxRedirects': 10,
             'timeout': 9000
         };
@@ -550,20 +563,20 @@ async function OptimizedBooks(initialGroups, processFunction) {
     return OKXWsOptimizedBooks(initialGroups, processFunction);
 }
 
-module.exports = { 
+module.exports = {
     OKXWsFundingRate,
-    OKXWsAggregate, 
-    OKXWsIndexTickers, 
-    OKXWsMarkPrice, 
-    OKXWsTickers, 
-    OKXWsOptimizedBooks, 
-    SpotCoin, 
-    SwapCoin, 
-    FuturesCoin, 
-    Aggregate, 
-    IndexTickers, 
-    Tickers, 
-    MarkPrice, 
+    OKXWsAggregate,
+    OKXWsIndexTickers,
+    OKXWsMarkPrice,
+    OKXWsTickers,
+    OKXWsOptimizedBooks,
+    SpotCoin,
+    SwapCoin,
+    FuturesCoin,
+    Aggregate,
+    IndexTickers,
+    Tickers,
+    MarkPrice,
     OptimizedBooks,
-    ApiPublic,ApiRubik
+    ApiPublic, ApiRubik
 };  
