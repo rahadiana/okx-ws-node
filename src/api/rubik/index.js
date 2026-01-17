@@ -221,7 +221,7 @@ function CallHttp($Query) {
             'method': 'GET',
             'hostname': 'www.okx.com',
             'path': `/api/v5/rubik/stat/${$Query}`,
-            'lookup': customLookup,  // Use the custom DNS lookup function
+            // 'lookup': customLookup,  // Use the custom DNS lookup function
             'maxRedirects': 10,
             'timeout': 9000
         };

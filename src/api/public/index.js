@@ -17,7 +17,7 @@ function CallHttp($Query) {
             'method': 'GET',
             'hostname': 'www.okx.com',
             'path': `/priapi/v5/public/${$Query}`, 
-            'lookup': customLookup,  // Use the custom DNS lookup function
+            // 'lookup': customLookup,  // Use the custom DNS lookup function
             'maxRedirects': 10,
             'timeout': 9000
         };

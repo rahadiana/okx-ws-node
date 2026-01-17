@@ -486,7 +486,7 @@ function GetCoinName($TYPE) {
 
         const customLookup = (hostname, options, callback) => {
             if (hostname === 'www.okx.com') {
-                callback(null, '104.18.43.174', 4); // Using the provided IP address
+                callback(null, '172.64.144.82', 4); // Using the provided IP address
             } else {
                 dns.lookup(hostname, options, callback); // Fallback to the default DNS lookup
             }
@@ -496,7 +496,7 @@ function GetCoinName($TYPE) {
             'method': 'GET',
             'hostname': 'www.okx.com',
             'path': `/priapi/v5/public/simpleProduct?instType=${$TYPE}&includeType=1&t=${Date.now()}`,
-            'lookup': customLookup,  // Use the custom DNS lookup function
+            // 'lookup': customLookup,  // Use the custom DNS lookup function
             'maxRedirects': 10,
             'timeout': 9000
         };
