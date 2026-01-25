@@ -26,14 +26,14 @@ async function WsConnection(CoinArray, ChannelType, messageCallback, options = {
 
     const opts = Object.assign({
         maxQueue: 20000,
-        processPerTick: 1000,
+        processPerTick: 1200,
         processIntervalMs: 50,
         statsIntervalMs: 60000,
         dropOnFull: false,
         onBackpressure: null,
         onStats: null,
         onError: null, // ✅ ADDED: dedicated error callback
-        parserWorkers: 1,
+        parserWorkers: 3,
         // resubscribe options
         resubscribeThresholdMs: 5000,
         resubscribeIntervalMs: 2000,
