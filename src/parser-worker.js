@@ -1,42 +1,12 @@
 const { parentPort } = require('worker_threads');
 
+if (!parentPort) process.exit(0);
+
 // startup log for easier tracing
-try {
-    console.log('parser worker started');
-} catch (e) { }
+try { console.log('parser worker started'); } catch (e) { }
 
-// report errors to parent before exiting so the main thread can log/restart
-function _reportWorkerError(err, type) {
-    try {
-        const payload = {
-            __worker_error: true,
-            type: type || 'error',
-            message: err && err.message ? err.message : String(err),
-            stack: err && err.stack ? err.stack : undefined
-        };
-        if (parentPort && parentPort.postMessage) {
-            try { parentPort.postMessage(payload); } catch (e) { }
-        } else {
-            try { console.error('Worker error:', payload); } catch (e) { }
-        }
-    } catch (e) { }
-    // give a short delay to ensure message is sent
-    try { setTimeout(() => process.exit(1), 50); } catch (e) { process.exit(1); }
-}
-
-process.on('uncaughtException', (err) => {
-    try { _reportWorkerError(err, 'uncaughtException'); } catch (e) { try { process.exit(1); } catch (e) { } }
-});
-
-process.on('unhandledRejection', (reason) => {
-    try {
-        const err = (reason instanceof Error) ? reason : new Error(typeof reason === 'string' ? reason : JSON.stringify(reason));
-        _reportWorkerError(err, 'unhandledRejection');
-    } catch (e) { try { process.exit(1); } catch (e) { } }
-});
-
+// robust parsing helper: attempts multiple strategies to JSON-parse messy payloads
 function tryParseOne(payload) {
-    // normalize payload to string and apply tolerant parsing
     try {
         let str = null;
         if (Buffer.isBuffer(payload)) str = payload.toString('utf8');
@@ -45,30 +15,26 @@ function tryParseOne(payload) {
         else if (typeof payload === 'string') str = payload;
 
         if (!str) return { result: payload };
-
         str = str.trim();
 
-        // quick attempt
+        // simplest parse
         try { return { result: JSON.parse(str) }; } catch (e) {}
 
-        // remove any leading garbage before first { or [
-        const first = str.search(/[\{\[]/);
+        // strip leading garbage before first object/array
+        const first = str.search(/[{[]/);
         if (first > 0) str = str.slice(first);
 
-        // try removing trailing commas like ',]' or ',}'
+        // remove trailing commas
         let s2 = str.replace(/,\s*([\]\}])/g, '$1');
         try { return { result: JSON.parse(s2) }; } catch (e) {}
 
-        // try joining consecutive objects into an array
+        // try wrap multiple objects into array
         const s3 = '[' + s2.replace(/}\s*\{/g, '},{') + ']';
         try { return { result: JSON.parse(s3) }; } catch (e) {}
 
-        // fallback: try extracting balanced { ... } objects while respecting string quotes
+        // extract balanced objects
         const objects = [];
-        let depth = 0;
-        let inString = false;
-        let esc = false;
-        let start = -1;
+        let depth = 0, inString = false, esc = false, start = -1;
         for (let i = 0; i < str.length; i++) {
             const ch = str[i];
             if (inString) {
@@ -77,29 +43,16 @@ function tryParseOne(payload) {
                 if (ch === inString) { inString = false; continue; }
                 continue;
             }
-            if (ch === '"' || ch === '\'') { inString = ch; continue; }
-            if (ch === '{') {
-                if (depth === 0) start = i;
-                depth++;
-                continue;
-            }
-            if (ch === '}') {
-                depth--;
-                if (depth === 0 && start >= 0) {
-                    objects.push(str.slice(start, i + 1));
-                    start = -1;
-                }
-            }
+            if (ch === '"' || ch === "'") { inString = ch; continue; }
+            if (ch === '{') { if (depth === 0) start = i; depth++; continue; }
+            if (ch === '}') { depth--; if (depth === 0 && start >= 0) { objects.push(str.slice(start, i + 1)); start = -1; } }
         }
-
         if (objects.length === 1) {
             try { return { result: JSON.parse(objects[0]) }; } catch (e) {}
         }
         if (objects.length > 1) {
             const parsed = [];
-            for (let o of objects) {
-                try { parsed.push(JSON.parse(o)); } catch (e) {}
-            }
+            for (let o of objects) { try { parsed.push(JSON.parse(o)); } catch (e) {} }
             if (parsed.length) return { result: parsed };
         }
 
@@ -109,13 +62,24 @@ function tryParseOne(payload) {
     }
 }
 
+// report errors to parent and exit
+function _reportWorkerError(err, type) {
+    try {
+        const payload = { __worker_error: true, type: type || 'error', message: err && err.message ? err.message : String(err), stack: err && err.stack ? err.stack : undefined };
+        try { parentPort.postMessage(payload); } catch (e) { try { console.error('Worker error:', payload); } catch (e) {} }
+    } catch (e) { }
+    try { setTimeout(() => process.exit(1), 50); } catch (e) { process.exit(1); }
+}
+
+process.on('uncaughtException', (err) => { try { _reportWorkerError(err, 'uncaughtException'); } catch (e) { try { process.exit(1); } catch (e) {} } });
+process.on('unhandledRejection', (reason) => { try { const err = (reason instanceof Error) ? reason : new Error(typeof reason === 'string' ? reason : JSON.stringify(reason)); _reportWorkerError(err, 'unhandledRejection'); } catch (e) { try { process.exit(1); } catch (e) {} } });
+
 parentPort.on('message', (data) => {
     const id = data && data.id;
     const payload = data && data.payload;
     try {
         if (Array.isArray(payload)) {
             const out = payload.map(p => tryParseOne(p));
-            // map to either result or error preserved
             parentPort.postMessage({ id, result: out });
             return;
         }
@@ -127,3 +91,4 @@ parentPort.on('message', (data) => {
         parentPort.postMessage({ id, error: e && e.message ? e.message : String(e) });
     }
 });
+
