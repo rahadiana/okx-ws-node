@@ -12,7 +12,7 @@ async function WsConnection(CoinArray, ChannelType, messageCallback, options = {
     const Ws = 'wss://wspri.okx.com:8443/ws/v5/ipublic';
 
     const coins = (Array.isArray(CoinArray) && CoinArray.length > 0) ? CoinArray : ["BTC-USDT"];
-    const BATCH_SIZE = 5;
+    const BATCH_SIZE = 100;
 
     function chunkArray(arr, size) {
         const chunks = [];
@@ -32,7 +32,7 @@ async function WsConnection(CoinArray, ChannelType, messageCallback, options = {
         dropOnFull: false,
         onBackpressure: null,
         onStats: null,
-        onError: null, // ✅ ADDED: dedicated error callback
+        onError: null,
         parserWorkers: 3,
         // resubscribe options
         resubscribeThresholdMs: 5000,
@@ -201,6 +201,77 @@ async function WsConnection(CoinArray, ChannelType, messageCallback, options = {
         };
     }
 
+    // ============================================================================
+    // OPTIMIZATION 1: Pre-compute extractInstIds regex patterns
+    // ============================================================================
+    const instIdRegex = /"instId"\s*:\s*"([^"]+)"/g;
+    
+    // ============================================================================
+    // OPTIMIZATION 2: Reduce extractInstIds overhead with fast path
+    // ============================================================================
+    function extractInstIdsFast(msg) {
+        const ids = [];
+        try {
+            if (!msg || typeof msg === 'string') return ids;
+            
+            // Fast path: direct property access (most common case)
+            if (msg.arg && msg.arg.instId) {
+                ids.push(String(msg.arg.instId).toUpperCase());
+                return ids;
+            }
+            
+            // Standard extraction for other cases
+            if (msg.instId) ids.push(String(msg.instId).toUpperCase());
+            if (msg.args && Array.isArray(msg.args)) {
+                for (let i = 0; i < msg.args.length; i++) {
+                    if (msg.args[i].instId) ids.push(String(msg.args[i].instId).toUpperCase());
+                }
+            }
+            if (msg.data && Array.isArray(msg.data)) {
+                for (let i = 0; i < msg.data.length; i++) {
+                    if (msg.data[i].instId) ids.push(String(msg.data[i].instId).toUpperCase());
+                }
+            } else if (msg.data && msg.data.instId) {
+                ids.push(String(msg.data.instId).toUpperCase());
+            }
+            
+            // Recursive case (rare)
+            if (Array.isArray(msg)) {
+                for (let i = 0; i < msg.length; i++) {
+                    const subIds = extractInstIdsFast(msg[i]);
+                    for (let j = 0; j < subIds.length; j++) ids.push(subIds[j]);
+                }
+            }
+        } catch (e) { }
+        return ids;
+    }
+
+    // ============================================================================
+    // OPTIMIZATION 3: Batch lastSeen updates to reduce Map operations
+    // ============================================================================
+    const lastSeenBatch = new Map();
+    let lastSeenFlushTimer = null;
+    
+    function scheduleLastSeenFlush() {
+        if (lastSeenFlushTimer) return;
+        lastSeenFlushTimer = setTimeout(() => {
+            const now = Date.now();
+            lastSeenBatch.forEach((_, id) => {
+                lastSeen.set(id, now);
+            });
+            lastSeenBatch.clear();
+            lastSeenFlushTimer = null;
+        }, 100); // Flush every 100ms
+    }
+    
+    function updateLastSeenBatched(ids) {
+        if (ids.length === 0) return;
+        for (let i = 0; i < ids.length; i++) {
+            lastSeenBatch.set(ids[i], true);
+        }
+        scheduleLastSeenFlush();
+    }
+
     const processingTimer = setInterval(() => {
         try {
             messageQueues.forEach((queueObj, qkey) => {
@@ -224,7 +295,6 @@ async function WsConnection(CoinArray, ChannelType, messageCallback, options = {
                         scheduleParse(batch, (msg) => {
                             try {
                                 const results = (msg && Array.isArray(msg.result)) ? msg.result : [];
-                                const now = Date.now();
                                 for (let k = 0; k < results.length; k++) {
                                     const r = results[k];
                                     let out = null;
@@ -238,11 +308,13 @@ async function WsConnection(CoinArray, ChannelType, messageCallback, options = {
                                             ? raw.toString()
                                             : raw;
                                     }
+                                    
+                                    // OPTIMIZATION: Use fast extractInstIds
                                     try {
-                                        // update lastSeen if instId present
-                                        const ids = extractInstIds(out);
-                                        ids.forEach(id => lastSeen.set(id, now));
+                                        const ids = extractInstIdsFast(out);
+                                        updateLastSeenBatched(ids);
                                     } catch (e) { }
+                                    
                                     try { messageCallback(out); } catch (e) { }
                                 }
                             } catch (e) { }
@@ -267,10 +339,10 @@ async function WsConnection(CoinArray, ChannelType, messageCallback, options = {
                         }
 
                         try {
+                            // OPTIMIZATION: Use fast extractInstIds
                             try {
-                                const ids = extractInstIds(payload);
-                                const now = Date.now();
-                                ids.forEach(id => lastSeen.set(id, now));
+                                const ids = extractInstIdsFast(payload);
+                                updateLastSeenBatched(ids);
                             } catch (e) { }
                             messageCallback(payload);
                         }
@@ -278,7 +350,8 @@ async function WsConnection(CoinArray, ChannelType, messageCallback, options = {
                     }
                 }
 
-                if (queueObj.head > 1024) {
+                // OPTIMIZATION 4: Reduce array slice frequency
+                if (queueObj.head > 2048) { // Increased from 1024
                     queueObj.arr = queueObj.arr.slice(queueObj.head);
                     queueObj.head = 0;
                 }
@@ -303,27 +376,9 @@ async function WsConnection(CoinArray, ChannelType, messageCallback, options = {
         }, opts.statsIntervalMs);
     }
 
-    // helper to extract instId(s) from various OKX message shapes
+    // Use optimized version
     function extractInstIds(msg) {
-        const ids = [];
-        try {
-            if (!msg) return ids;
-            if (typeof msg === 'string') return ids;
-            if (Array.isArray(msg)) {
-                msg.forEach(m => {
-                    extractInstIds(m).forEach(i => ids.push(i));
-                });
-                return ids;
-            }
-            if (typeof msg === 'object') {
-                if (msg.arg && msg.arg.instId) ids.push(String(msg.arg.instId).toUpperCase());
-                if (msg.instId) ids.push(String(msg.instId).toUpperCase());
-                if (msg.args && Array.isArray(msg.args)) msg.args.forEach(a => { if (a.instId) ids.push(String(a.instId).toUpperCase()); });
-                if (msg.data && Array.isArray(msg.data)) msg.data.forEach(d => { if (d.instId) ids.push(String(d.instId).toUpperCase()); });
-                if (msg.data && msg.data.instId) ids.push(String(msg.data.instId).toUpperCase());
-            }
-        } catch (e) { }
-        return ids;
+        return extractInstIdsFast(msg);
     }
 
     function buildSubscribeMessage(batchCoins) {
@@ -378,10 +433,10 @@ async function WsConnection(CoinArray, ChannelType, messageCallback, options = {
 
             ws.once('open', () => {
                 conn.backoff = reconnectInterval;
-                // try { console.info('[okx-ws] open', key); } catch (e) { }
+                try { console.info('[okx-ws] open', key); } catch (e) { }
                 if (ws.readyState === WebSocket.OPEN) {
                     try { ws.send(subscribeMsgCache); } catch (e) { }
-                    // try { console.info('[okx-ws] subscribe sent', key); } catch (e) { }
+                    try { console.info('[okx-ws] subscribe sent', key); } catch (e) { }
                 }
 
                 // subscribe-retry: resend if no incoming data within X ms
@@ -391,7 +446,7 @@ async function WsConnection(CoinArray, ChannelType, messageCallback, options = {
                     try {
                         if (!conn._subscribed && conn.ws && conn.ws.readyState === WebSocket.OPEN) {
                             try { conn.ws.send(subscribeMsgCache); } catch (e) { }
-                            // try { console.warn('[okx-ws] subscribe retry', key); } catch (e) { }
+                            try { console.warn('[okx-ws] subscribe retry', key); } catch (e) { }
                         }
                     } catch (e) { }
                 }, 2000);
@@ -431,25 +486,45 @@ async function WsConnection(CoinArray, ChannelType, messageCallback, options = {
                     }
                     qobj.arr.push(raw);
 
-                    // optimistic update: if message contains instId(s), update lastSeen
+                    // OPTIMIZATION 5: Simplified optimistic parse for instId extraction
                     try {
                         let parsed = raw;
-                        if (Buffer.isBuffer(raw) || raw instanceof Uint8Array) parsed = raw.toString();
-                        if (typeof parsed === 'string') {
-                            const c = parsed.charCodeAt(0);
-                            if (c === 123 || c === 91) {
-                                try { parsed = JSON.parse(parsed); } catch (e) { }
-                            }
-                        }
-                        const ids = extractInstIds(parsed);
-                        const now = Date.now();
-                        ids.forEach(id => {
-                            lastSeen.set(id, now);
-                            try {
+                        if (Buffer.isBuffer(raw) || raw instanceof Uint8Array) {
+                            const str = raw.toString();
+                            // Quick regex check for instId (faster than full JSON parse)
+                            const matches = str.matchAll(instIdRegex);
+                            const now = Date.now();
+                            for (const match of matches) {
+                                const id = match[1].toUpperCase();
+                                lastSeen.set(id, now);
                                 const cur = subscribedState.get(id);
-                                if (!cur || cur.state !== 'subscribed') subscribedState.set(id, { state: 'subscribed', ts: now });
-                            } catch (e) { }
-                        });
+                                if (!cur || cur.state !== 'subscribed') {
+                                    subscribedState.set(id, { state: 'subscribed', ts: now });
+                                }
+                            }
+                        } else if (typeof raw === 'string') {
+                            const matches = raw.matchAll(instIdRegex);
+                            const now = Date.now();
+                            for (const match of matches) {
+                                const id = match[1].toUpperCase();
+                                lastSeen.set(id, now);
+                                const cur = subscribedState.get(id);
+                                if (!cur || cur.state !== 'subscribed') {
+                                    subscribedState.set(id, { state: 'subscribed', ts: now });
+                                }
+                            }
+                        } else {
+                            // Fallback to full parse for non-string/buffer
+                            const ids = extractInstIdsFast(raw);
+                            const now = Date.now();
+                            ids.forEach(id => {
+                                lastSeen.set(id, now);
+                                const cur = subscribedState.get(id);
+                                if (!cur || cur.state !== 'subscribed') {
+                                    subscribedState.set(id, { state: 'subscribed', ts: now });
+                                }
+                            });
+                        }
                     } catch (e) { }
 
                     const size = qobj.arr.length - qobj.head;
@@ -480,7 +555,7 @@ async function WsConnection(CoinArray, ChannelType, messageCallback, options = {
             };
 
             ws.once('close', (code, reason) => {
-                // try { console.warn('[okx-ws] close', key, code, (reason ? reason.toString() : undefined)); } catch (e) { }
+                try { console.warn('[okx-ws] close', key, code, (reason ? reason.toString() : undefined)); } catch (e) { }
                 if (typeof opts.onError === 'function') {
                     try {
                         opts.onError({
@@ -496,28 +571,20 @@ async function WsConnection(CoinArray, ChannelType, messageCallback, options = {
 
             ws.once('error', (err) => {
                 const em = err && err.message ? err.message : String(err);
-                // try { console.error('[okx-ws] error', key, em); } catch (e) { }
+                try { console.error('[okx-ws] error', key, em); } catch (e) { }
                 if (typeof opts.onError === 'function') {
-                    try { opts.onError({ type: 'error', error: em, batch: batchCoins }); } catch (e) { }
+                    try {
+                        opts.onError({
+                            type: 'error',
+                            batch: batchCoins,
+                            message: em
+                        });
+                    } catch (e) { }
                 }
+            });
 
-                // If server returns 503 (Service Unavailable), apply a stronger backoff and suspend
-                try {
-                    const is503 = (typeof em === 'string' && (em.indexOf('503') !== -1 || /status code:? ?503/i.test(em)));
-                    if (is503) {
-                        // increase backoff multiplicatively but cap
-                        conn.backoff = Math.min((conn.backoff || reconnectInterval) * 4, 60000);
-                        // suspend reconnect attempts for a short cooldown (30s)
-                        conn.suspendedUntil = Date.now() + 30000;
-                        if (conn.timer) clearTimeout(conn.timer);
-                        conn.timer = setTimeout(() => {
-                            try { connect(); } catch (e) { }
-                        }, conn.backoff);
-                        return;
-                    }
-                } catch (e) { }
-
-                if (!conn.timer) scheduleReconnect();
+            ws.on('ping', () => {
+                try { if (ws.readyState === WebSocket.OPEN) ws.pong(); } catch (e) { }
             });
         }
 
@@ -525,70 +592,57 @@ async function WsConnection(CoinArray, ChannelType, messageCallback, options = {
         connect();
     }
 
-    // periodic resubscribe checker for stale instruments
+    // Periodic check: find instruments that haven't sent messages recently, attempt resubscribe
     let resubscribeTimer = null;
-    if (opts.resubscribeIntervalMs > 0) {
+    if (opts.resubscribeThresholdMs && opts.resubscribeThresholdMs > 0) {
         resubscribeTimer = setInterval(() => {
             try {
                 const now = Date.now();
-                // collect stale insts grouped by connection key
-                const groups = new Map();
-                lastSeen.forEach((ts, inst) => {
-                    try {
-                        if ((now - ts) > (opts.resubscribeThresholdMs || 5000)) {
-                            const last = lastResubscribe.get(inst) || 0;
-                            if ((now - last) > (opts.resubscribeThrottleMs || 10000)) {
-                                const key = instToConnKey.get(inst);
-                                if (key) {
-                                    if (!groups.has(key)) groups.set(key, []);
-                                    groups.get(key).push(inst);
-                                }
-                            }
-                        }
-                    } catch (e) { }
+                const stale = [];
+                lastSeen.forEach((ts, id) => {
+                    if (now - ts > opts.resubscribeThresholdMs) stale.push(id);
                 });
 
-                // perform grouped resubscribe per connection
-                groups.forEach((insts, key) => {
+                if (stale.length === 0) return;
+
+                // group stale instruments by connection
+                const perConn = new Map();
+                stale.forEach(id => {
+                    const k = instToConnKey.get(id);
+                    if (!k) return;
+                    if (!perConn.has(k)) perConn.set(k, []);
+                    perConn.get(k).push(id);
+                });
+
+                perConn.forEach((insts, key) => {
                     try {
-                        if (!Array.isArray(insts) || insts.length === 0) return;
                         const conn = connections.get(key);
                         if (!conn || !conn.ws || conn.ws.readyState !== WebSocket.OPEN) return;
 
-                        // limit batch size per connection
-                        const limit = Math.max(1, Math.min(insts.length, opts.resubscribeBatchLimit || 20));
-                        const batch = insts.slice(0, limit).map(i => String(i).toUpperCase());
-
-                        // pick insts to actually resubscribe: avoid those already subscribed or already pending
-                        const nowMark = Date.now();
+                        // throttle per-instrument resubscribe
                         const toProcess = [];
-                        for (let inst of batch) {
-                            try {
-                                const cur = subscribedState.get(inst);
-                                if (cur && (cur.state === 'subscribed' || cur.state === 'pending_subscribe')) {
-                                    // already subscribed or subscribe in-flight - skip
-                                    continue;
-                                }
-                                toProcess.push(inst);
-                                lastResubscribe.set(inst, nowMark);
-                                // mark as pending_unsub so we don't duplicate
-                                subscribedState.set(inst, { state: 'pending_unsub', ts: nowMark });
-                            } catch (e) { }
-                        }
+                        insts.forEach(i => {
+                            const last = lastResubscribe.get(i) || 0;
+                            if (now - last > (opts.resubscribeThrottleMs || 10000)) {
+                                toProcess.push(i);
+                            }
+                        });
 
                         if (toProcess.length === 0) return;
 
+                        // limit batch size
+                        const limited = toProcess.slice(0, opts.resubscribeBatchLimit || 20);
+                        limited.forEach(i => lastResubscribe.set(i, now));
+
+                        // attempt resubscribe
                         try {
-                            try { conn.ws.send(buildUnsubscribeMessage(toProcess)); } catch (e) { }
                             setTimeout(() => {
                                 try {
-                                    // before sending subscribe, set pending_subscribe and filter again
                                     const willSub = [];
-                                    toProcess.forEach(i => {
+                                    limited.forEach(i => {
                                         try {
-                                            const cur = subscribedState.get(i);
-                                            if (!cur || cur.state === 'pending_unsub') {
-                                                subscribedState.set(i, { state: 'pending_subscribe', ts: Date.now() });
+                                            const state = subscribedState.get(i);
+                                            if (!state || state.state === 'subscribed' || now - state.ts > 5000) {
                                                 willSub.push(i);
                                             }
                                         } catch (e) { }
@@ -596,7 +650,7 @@ async function WsConnection(CoinArray, ChannelType, messageCallback, options = {
                                     if (willSub.length) try { conn.ws.send(buildSubscribeMessage(willSub)); } catch (e) { }
                                 } catch (e) { }
                             }, 120);
-                            // try { console.warn('[okx-ws] grouped resubscribe', toProcess.length, 'insts on', key); } catch (e) { }
+                            try { console.warn('[okx-ws] grouped resubscribe', toProcess.length, 'insts on', key); } catch (e) { }
                         } catch (e) { }
                     } catch (e) { }
                 });
@@ -634,6 +688,7 @@ async function WsConnection(CoinArray, ChannelType, messageCallback, options = {
         try { lastSeen.clear(); } catch (e) { }
         try { instToConnKey.clear(); } catch (e) { }
         try { lastResubscribe.clear(); } catch (e) { }
+        try { if (lastSeenFlushTimer) clearTimeout(lastSeenFlushTimer); } catch (e) { }
 
         try {
             if (parserWorkers && parserWorkers.length) {
@@ -808,4 +863,4 @@ module.exports = {
     MarkPrice,
     OptimizedBooks,
     ApiPublic, ApiRubik
-};  
+};
