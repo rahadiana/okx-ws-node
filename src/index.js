@@ -12,7 +12,7 @@ async function WsConnection(CoinArray, ChannelType, messageCallback, options = {
     const Ws = 'wss://wspri.okx.com:8443/ws/v5/ipublic';
 
     const coins = (Array.isArray(CoinArray) && CoinArray.length > 0) ? CoinArray : ["BTC-USDT"];
-    const BATCH_SIZE = 100;
+    const BATCH_SIZE = 30;
 
     function chunkArray(arr, size) {
         const chunks = [];
@@ -35,7 +35,7 @@ async function WsConnection(CoinArray, ChannelType, messageCallback, options = {
         onError: null,
         parserWorkers: 3,
         // resubscribe options
-        resubscribeThresholdMs: 5000,
+        resubscribeThresholdMs: 155000,
         resubscribeIntervalMs: 2000,
         resubscribeThrottleMs: 10000,
         // limit how many stale instruments to resubscribe per connection per check
