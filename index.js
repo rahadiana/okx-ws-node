@@ -1,8 +1,9 @@
 const { ApiPublic, SpotCoin, FuturesCoin, SwapCoin, Aggregate, IndexTickers, Tickers, MarkPrice, OptimizedBooks, OKXWsFundingRate } = require('./src');
+const myArgs = process.argv.slice(2);
 
 // Fungsi untuk memproses setiap pesan yang diterima dari WebSocket
 function processFunction(message) {
-  // console.log(message);
+  console.log(message);
 }
 
 async function name(params) {
@@ -10,7 +11,7 @@ async function name(params) {
 
   if (coinList.code == '0') {
 
-    Aggregate(coinList.data.map(d => d.instId).slice(0,900), processFunction, {
+    Aggregate(coinList.data.map(d => d.instId).slice(myArgs[0]||0,myArgs[1]||900), processFunction, {
       parserWorkers: 2,
       processIntervalMs: 10,
       processPerTick: 3000,

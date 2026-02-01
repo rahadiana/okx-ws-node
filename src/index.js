@@ -12,7 +12,7 @@ async function WsConnection(CoinArray, ChannelType, messageCallback, options = {
     const Ws = 'wss://wspri.okx.com:8443/ws/v5/ipublic';
 
     const coins = (Array.isArray(CoinArray) && CoinArray.length > 0) ? CoinArray : ["BTC-USDT"];
-    const BATCH_SIZE = 30;
+    const BATCH_SIZE = 6;
 
     function chunkArray(arr, size) {
         const chunks = [];
