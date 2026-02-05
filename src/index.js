@@ -5,7 +5,7 @@ const ApiRubik = require("./api/rubik/index.js");
 var fs = require('fs');
 var dns = require('dns');
 
-let reconnectInterval = 900; // millisecond
+let reconnectInterval = 500; // millisecond
 
 async function WsConnection(CoinArray, ChannelType, messageCallback, options = {}) {
     // ✅ FIXED: URL yang benar
@@ -39,7 +39,7 @@ async function WsConnection(CoinArray, ChannelType, messageCallback, options = {
         resubscribeIntervalMs: 2000,
         resubscribeThrottleMs: 10000,
         // limit how many stale instruments to resubscribe per connection per check
-        resubscribeBatchLimit: 20
+        resubscribeBatchLimit: 15
     }, options);
 
     const messageQueues = new Map();
