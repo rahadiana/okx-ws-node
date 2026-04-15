@@ -23,7 +23,7 @@
   "homepage": "https://github.com/rahadiana/okx-ws-node#readme",
   "dependencies": {
     "@rahadiana/node_response_standard": "^0.0.2",
-    "follow-redirects": "^1.15.6",
+    "follow-redirects": "^1.16.0",
     "ws": "^8.18.0"
   }
 }
