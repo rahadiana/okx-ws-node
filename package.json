@@ -24,6 +24,6 @@
   "dependencies": {
     "@rahadiana/node_response_standard": "^0.0.2",
     "follow-redirects": "^1.15.6",
-    "ws": "^8.18.0"
+    "ws": "^8.20.1"
   }
 }
