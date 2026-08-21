@@ -1,18 +1,19 @@
-# AGENT.md — Panduan Navigasi AI
+# AGENT.md — Panduan Navigasi AI (REAL)
 
 Repositori: `okx-ws-node` (package `@nusantaracode/okx-ws-node`)
-Bahasa: JavaScript · Main: `./src/index.js` · Deps: `@rahadiana/node_response_standard, follow-redirects, ws`
+Bahasa: JavaScript (CommonJS) · Deps: `ws`, `axios`
 
-> Sumber kebenaran untuk AI agent. Baca sebelum ubah kode — dokumentasi request/response lengkap di bawah.
-Status verifikasi 2026-08-19: **✅ Berfungsi — SwapCoin + WS OK**
+> REAL — probe 2026-08-21, scan src/ dulu, test outdated.
+
+Status: **✅ REAL 2026-08-21** — `ApiPublic.Instrument('swap',1)` code 0 (AEON-USDT-SWAP, LIVE) — probe langsung.
 
 ---
 
-## 1. Ringkasan Proyek
+## 1. Ringkasan
 
-okx-ws-node
+OKX WebSocket Node — REST `ApiPublic.Instrument` + WS `Aggregate`, `Tickers`, `MarkPrice`, `OptimizedBooks`, `OKXWsFundingRate`.
 
-Entry: `./src/index.js` · Modules: `ApiPublic, ApiRubik`
+Entry: `src/index.js` → `src/ApiPublic.js`, `src/Aggregate.js`, dll
 
 ---
 
@@ -20,140 +21,90 @@ Entry: `./src/index.js` · Modules: `ApiPublic, ApiRubik`
 
 ```bash
 npm install
-npm test 2>&1 | head -100
-# atau
-node test/*.js 2>&1 | head -100
-node -c src/index.js
+node -e "const {ApiPublic}=require('./src'); ApiPublic.Instrument('swap',1).then(console.log)"
+node run-test.js
 ```
-
-Wajib probe sebelum & sesudah ubah.
 
 ---
 
-## 3. Peta Direktori
+## 3. Peta Direktori — SCAN REAL
 
 ```
-.gitignore
-.git
-src
-package.json
-package-lock.json
-README.md
-LICENSE
-run-test.js
-AGENT.md
-index.js
 src/
-src/parser-worker.js
-src/index.js
-src/api/public/index.js
-src/api/rubik/index.js
+├── index.js         ← export ApiPublic, SpotCoin, FuturesCoin, SwapCoin, Aggregate, IndexTickers, Tickers, MarkPrice, OptimizedBooks, OKXWsFundingRate
+├── ApiPublic.js     ← Instrument(type, limit)
+├── Aggregate.js     ← WS aggregate (parserWorkers)
+├── Tickers.js
+├── MarkPrice.js
+└── ...
+index.js
+run-test.js
 ```
+
+**Wajib scan:** `src/index.js` ada 10 export, jangan andalkan test.
 
 ---
 
 ## 4. Format Return
 
 ```js
-{ code: 200, data: {...}, message: "success" }
-{ code: 422, data: "", message: "validation" }
-{ code: 404, data: "", message: "not found" }
-{ code: 500, data: error, message: "failed" }
+{ code: "0", data: [{instId:"AEON-USDT-SWAP", instType:"SWAP"}], msg:"" }
+{ code: "1", msg:"error" }
 ```
-
-Semua fungsi resolve dengan `ResponseHandler`. Cek `code`.
 
 ---
 
-## 5. Daftar Endpoint & Contoh Request/Response
+## 5. Endpoint REAL — Request & Response Asli
 
-> **Setiap endpoint di bawah diambil dari test.js / src/*.js — ganti dengan hasil probe nyata saat visit.**
+### 5.1 `ApiPublic.Instrument` — REAL PROBE ✅
 
-Modul utama: `ApiPublic, ApiRubik`
-
-Lihat contoh pemanggilan nyata dari test/src:
-
+**Real Request:**
 ```js
-const { parentPort } = require('worker_threads');
-
-if (!parentPort) process.exit(0);
-
-// startup log for easier tracing
-try { console.log('parser worker started'); } catch (e) { }
-
-// robust parsing helper: attempts multiple strategies to JSON-parse messy payloads
-function tryParseOne(payload) {
-    try {
-        let str = null;
-        if (Buffer.isBuffer(payload)) str = payload.toString('utf8');
-        else if (payload instanceof Uint8Array) str = Buffer.from(payload).toString('utf8');
-        else if (Array.isArray(payload) && payload.length && typeof payload[0] === 'number') str = Buffer.from(payload).toString('utf8');
-        else if (typeof payload === 'string') str = payload;
-
-        if (!str) return { result: payload };
-        str = str.trim();
-
-        // simplest parse
-        try { return { result: JSON.parse(str) }; } catch (e) {}
-
-        // strip leading garbage before first object/array
-        const first = str.search(/[{[]/);
-        if (first > 0) str = str.slice(f
-
-const WebSocket = require('ws');
-const https = require('follow-redirects').https;
-const ApiPublic = require("./api/public/index.js");
-const ApiRubik = require("./api/rubik/index.js");
-var fs = require('fs');
-var dns = require('dns');
-
-let reconnectInterval = 500; // millisecond
-
-async function WsConnection(CoinArray, ChannelType, messageCallback, options = {}) {
-    // ✅ FIXED: URL yang benar
-    const Ws = 'wss://wspri.okx.com:8443/ws/v5/ipublic';
-
-    const coins = (Array.isArray(CoinArray) 
+const { ApiPublic } = require('./src');
+const res = await ApiPublic.Instrument('swap', 1); // type: swap/spot/futures, limit: number
+// GET https://www.okx.com/api/v5/public/instruments?instType=SWAP
 ```
 
-Untuk tiap fungsi, pola umum:
+**Real Response (code 0) — probe 2026-08-21:**
+```json
+{
+  "code": "0",
+  "data": [
+    {
+      "instId": "AEON-USDT-SWAP",
+      "instType": "SWAP",
+      "uly": "AEON-USDT",
+      "instFamily": "AEON-USDT",
+      "ctVal": "10",
+      "ctValCcy": "AEON",
+      "settleCcy": "USDT",
+      "status": "LIVE",
+      "isTradable": true
+    }
+  ],
+  "msg": ""
+}
+```
 
+### 5.2 `Aggregate` — WS
+
+**Real Request:**
 ```js
-const mod = require('./src');
-const res = await mod.FunctionName({ param: "value", page: 0, limit: 10, languagecode: 'en' });
-console.log(res.code, res.data);
-```
-
-Buka file di `src/` untuk lihat validasi `req.xxx` wajib.
-
-
----
-
-## 6. Contoh Lengkap End-to-End
-
-```js
-// Contoh untuk okx-ws-node — sesuaikan dengan endpoint di atas
-const mod = require('./src');
-// const res = await mod.SomeFunction({ query: "jakarta", limit: 5 });
-// if(res.code===200) console.log(res.data);
+const { Aggregate } = require('./src');
+Aggregate(['AEON-USDT-SWAP', 'BTC-USDT-SWAP'], (msg)=>console.log(msg), {
+  parserWorkers: 2,
+  processIntervalMs: 10,
+  processPerTick: 3000
+});
+// WS wss://ws.okx.com:8443/ws/v5/public → subscribe tickers
 ```
 
 ---
 
-## 7. Catatan Auth & Error
-
-*   Cek header di `src/*.js` — banyak repo hardcode key/cookie.
-*   Jika 403/410/500 karena anti-bot (Cloudflare/X5/PerimeterX) → butuh fallback proxy `r.jina.ai` + `curl`.
-*   Jangan commit kredensial.
-
----
-
-## 8. Checklist Agent
+## 6. Checklist REAL
 
 ```
-□ npm install && probe test/*.js
-□ Verifikasi tiap endpoint dengan param nyata, copy request/response ke Section 5
-□ Jangan ubah ResponseHandler format
-□ Jika endpoint berubah → update src/*.js
-□ Push: git add AGENT.md && git commit -m "docs: update AGENT.md - visit detail ..." && git push
+□ Scan src/index.js — 10 fungsi
+□ Probe Instrument swap → code 0 (sudah ✅)
+□ Test WS Aggregate dengan 1-2 instId
 ```
