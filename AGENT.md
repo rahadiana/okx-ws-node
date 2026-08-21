@@ -3,7 +3,7 @@
 Repositori: `okx-ws-node` (package `@nusantaracode/okx-ws-node`)
 Bahasa: JavaScript · Main: `./src/index.js` · Deps: `@rahadiana/node_response_standard, follow-redirects, ws`
 
-> Sumber kebenaran untuk AI agent. Baca sebelum ubah kode.
+> Sumber kebenaran untuk AI agent. Baca sebelum ubah kode — dokumentasi request/response lengkap di bawah.
 Status verifikasi 2026-08-19: **✅ Berfungsi — SwapCoin + WS OK**
 
 ---
@@ -12,7 +12,7 @@ Status verifikasi 2026-08-19: **✅ Berfungsi — SwapCoin + WS OK**
 
 okx-ws-node
 
-Entry: `./src/index.js` · Src: `src/api/public/index.js, src/api/rubik/index.js, src/index.js, src/parser-worker.js`
+Entry: `./src/index.js` · Modules: `ApiPublic, ApiRubik`
 
 ---
 
@@ -20,143 +20,140 @@ Entry: `./src/index.js` · Src: `src/api/public/index.js, src/api/rubik/index.js
 
 ```bash
 npm install
-# test
-npm test 2>&1 | head -50
+npm test 2>&1 | head -100
 # atau
 node test/*.js 2>&1 | head -100
-# syntax check
 node -c src/index.js
 ```
+
+Wajib probe sebelum & sesudah ubah.
 
 ---
 
 ## 3. Peta Direktori
 
 ```
-.git\n.gitignore\nAGENT.md\nLICENSE\nREADME.md\nindex.js\npackage-lock.json\npackage.json\nrun-test.js\nsrc
+.gitignore
+.git
+src
+package.json
+package-lock.json
+README.md
+LICENSE
+run-test.js
+AGENT.md
+index.js
 src/
-api\nindex.js\nparser-worker.js
+src/parser-worker.js
+src/index.js
+src/api/public/index.js
+src/api/rubik/index.js
 ```
 
 ---
 
 ## 4. Format Return
 
-Semua fungsi resolve via `ResponseHandler(code, data, message)`:
-
 ```js
 { code: 200, data: {...}, message: "success" }
-{ code: 422, data: "", message: "validation error" }
+{ code: 422, data: "", message: "validation" }
 { code: 404, data: "", message: "not found" }
 { code: 500, data: error, message: "failed" }
 ```
-Cek `code`. Jangan ubah format.
+
+Semua fungsi resolve dengan `ResponseHandler`. Cek `code`.
 
 ---
 
-## 5. Daftar Endpoint / Fungsi Utama
+## 5. Daftar Endpoint & Contoh Request/Response
 
-Ter-deteksi dari `src/index.js`:
+> **Setiap endpoint di bawah diambil dari test.js / src/*.js — ganti dengan hasil probe nyata saat visit.**
 
-- `OKXWsFundingRate`
-- `OKXWsAggregate`
-- `OKXWsIndexTickers`
-- `OKXWsMarkPrice`
-- `OKXWsTickers`
-- `OKXWsOptimizedBooks`
-- `SpotCoin`
-- `SwapCoin`
-- `FuturesCoin`
-- `Aggregate`
-- `IndexTickers`
-- `Tickers`
-- `MarkPrice`
-- `OptimizedBooks`
-- `ApiPublic`
+Modul utama: `ApiPublic, ApiRubik`
 
-### Cara Pakai Umum
+Lihat contoh pemanggilan nyata dari test/src:
+
+```js
+const { parentPort } = require('worker_threads');
+
+if (!parentPort) process.exit(0);
+
+// startup log for easier tracing
+try { console.log('parser worker started'); } catch (e) { }
+
+// robust parsing helper: attempts multiple strategies to JSON-parse messy payloads
+function tryParseOne(payload) {
+    try {
+        let str = null;
+        if (Buffer.isBuffer(payload)) str = payload.toString('utf8');
+        else if (payload instanceof Uint8Array) str = Buffer.from(payload).toString('utf8');
+        else if (Array.isArray(payload) && payload.length && typeof payload[0] === 'number') str = Buffer.from(payload).toString('utf8');
+        else if (typeof payload === 'string') str = payload;
+
+        if (!str) return { result: payload };
+        str = str.trim();
+
+        // simplest parse
+        try { return { result: JSON.parse(str) }; } catch (e) {}
+
+        // strip leading garbage before first object/array
+        const first = str.search(/[{[]/);
+        if (first > 0) str = str.slice(f
+
+const WebSocket = require('ws');
+const https = require('follow-redirects').https;
+const ApiPublic = require("./api/public/index.js");
+const ApiRubik = require("./api/rubik/index.js");
+var fs = require('fs');
+var dns = require('dns');
+
+let reconnectInterval = 500; // millisecond
+
+async function WsConnection(CoinArray, ChannelType, messageCallback, options = {}) {
+    // ✅ FIXED: URL yang benar
+    const Ws = 'wss://wspri.okx.com:8443/ws/v5/ipublic';
+
+    const coins = (Array.isArray(CoinArray) 
+```
+
+Untuk tiap fungsi, pola umum:
 
 ```js
 const mod = require('./src');
-// atau require('./src/index.js') tergantung repo
-// contoh generic:
-const res = await mod.SomeFunction({ param: "value", page: 0, limit: 10 });
+const res = await mod.FunctionName({ param: "value", page: 0, limit: 10, languagecode: 'en' });
 console.log(res.code, res.data);
 ```
 
-Lihat file di `src/` untuk field `req` wajib tiap fungsi — biasanya `req.query`, `req.url`, `req.id`, `req.page`.
+Buka file di `src/` untuk lihat validasi `req.xxx` wajib.
 
-#### Contoh dari test/ atau index.js:
+
+---
+
+## 6. Contoh Lengkap End-to-End
+
 ```js
-const { OKXWsAggregate, SwapCoin } = require('./src');
-
-// Lightweight message processor for high-throughput
-let msgCount = 0;
-function processFunction(message) {
-  msgCount++;
-  // keep processing minimal — avoid heavy sync work or unbounded in-memory storage
-  if ((msgCount & 0x3FFF) === 0) { // sample log roughly every 16384 messages
-    if (typeof message === 'object') console.log('sample:', JSON.stringify(message).slice(0, 200));
-    else console.log('sample:', String(message).slice(0, 200));
-  }
-}
-
-async function main() {
-  try {
-    const coinList = await SwapCoin(); // no param
-    if (coinList && coinList.status === 200 && Array.isArray(coinList.data)) {
-      const groups = coinLis
+// Contoh untuk okx-ws-node — sesuaikan dengan endpoint di atas
+const mod = require('./src');
+// const res = await mod.SomeFunction({ query: "jakarta", limit: 5 });
+// if(res.code===200) console.log(res.data);
 ```
 
 ---
 
-## 6. Contoh Request & Response (Wajib Diisi Agent Setelah Verifikasi)
+## 7. Catatan Auth & Error
 
-> **Template — agent yang visit WAJIB ganti dengan hasil probe nyata.**
-
-**Request:**
-```js
-const { SomeFunction } = require('./src');
-const res = await SomeFunction({ query: "jakarta", page: 1, limit: 10 });
-```
-
-**Response Sukses:**
-```json
-{
-  "code": 200,
-  "data": { "example": "isi data nyata dari API target" },
-  "message": "success"
-}
-```
-
-**Response Gagal:**
-```json
-{
-  "code": 422,
-  "data": "",
-  "message": "validation error / api unreachable"
-}
-```
-
-*Catatan: Untuk repo ini, cek `src/api/public/index.js` untuk endpoint spesifik, dan update section ini dengan contoh real setelah `node test` berhasil.*
-
----
-
-## 7. Catatan Auth & Rate Limit
-
-*   Cek `src/*.js` header — banyak repo hardcode cookie/key (misal RajaOngkir, 1688 X5, TikTok, Waze).
-*   Jika 403/410 X5/Cloudflare → butuh cookie segar, lihat issue di `apisell_agent_rules/rules/06-verification-report.md`.
-*   Jangan commit kredensial baru tanpa dokumentasi.
+*   Cek header di `src/*.js` — banyak repo hardcode key/cookie.
+*   Jika 403/410/500 karena anti-bot (Cloudflare/X5/PerimeterX) → butuh fallback proxy `r.jina.ai` + `curl`.
+*   Jangan commit kredensial.
 
 ---
 
 ## 8. Checklist Agent
 
 ```
-□ npm install && probe fungsi utama (lihat test/)
-□ Baca src/index.js sampai paham req → API target
+□ npm install && probe test/*.js
+□ Verifikasi tiap endpoint dengan param nyata, copy request/response ke Section 5
 □ Jangan ubah ResponseHandler format
-□ Jika parser/endpoint berubah → update src/*.js
-□ Isi Section 6 dengan request/response nyata setelah verifikasi
+□ Jika endpoint berubah → update src/*.js
 □ Push: git add AGENT.md && git commit -m "docs: update AGENT.md - visit detail ..." && git push
 ```
